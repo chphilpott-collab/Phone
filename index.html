@@ -109,8 +109,11 @@ button.row:active, .row.tap:active { background: var(--surface-2); }
 .row .lbl { font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .row .sub { font-size: 13px; color: var(--ink-2); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; gap: 8px; }
 .row .sub .acct { color: var(--ink-3); }
+.row .sub.wrap { white-space: normal; display: block; line-height: 1.35; }
 .row .val { font-family: var(--num); font-variant-numeric: tabular-nums; font-size: 16px; text-align: right; white-space: nowrap; }
 .row .val small { display: block; font-size: 12px; color: var(--ink-3); margin-top: 2px; font-family: var(--text); }
+.row .val small.pos { color: var(--pine); }
+.row .val small.neg { color: var(--down); }
 .row .chev { color: var(--ink-3); flex: none; }
 .pos { color: var(--pine); }
 .neg { color: var(--down); }
@@ -122,19 +125,8 @@ button.row:active, .row.tap:active { background: var(--surface-2); }
 .hero .label { font-size: 15px; color: var(--ink-2); }
 .hero .big { font-family: var(--num); font-variant-numeric: tabular-nums; font-size: 46px; font-weight: 600; letter-spacing: -0.025em; line-height: 1.05; margin: 4px 0 6px; }
 .hero .delta { font-size: 15px; font-family: var(--num); }
-.goalbtn { display: block; width: 100%; text-align: left; margin-top: 22px; }
-.track { position: relative; height: 34px; }
-.track .rail { position: absolute; left: 0; right: 0; top: 15px; height: 4px; border-radius: 2px; background: var(--track); }
-.track .fill { position: absolute; left: 0; top: 15px; height: 4px; border-radius: 2px; background: var(--pine); }
-.track .pace { position: absolute; top: 15px; height: 4px; background: repeating-linear-gradient(90deg, var(--pine) 0 4px, transparent 4px 8px); opacity: .45; }
-.track .now { position: absolute; top: 9px; width: 16px; height: 16px; margin-left: -8px; border-radius: 8px; background: var(--pine); box-shadow: 0 0 0 3px var(--bg); }
-.track .ghost { position: absolute; top: 10px; width: 14px; height: 14px; margin-left: -7px; border-radius: 7px; border: 2px solid var(--pine); background: var(--bg); }
-.track .end { position: absolute; right: 0; top: 7px; width: 2px; height: 20px; background: var(--ink-3); border-radius: 1px; }
-.tracklabels { position: relative; height: 34px; font-size: 13px; color: var(--ink-2); }
-.tracklabels span { position: absolute; top: 0; white-space: nowrap; line-height: 1.25; }
-.tracklabels b { display: block; color: var(--ink); font-weight: 600; font-family: var(--num); font-variant-numeric: tabular-nums; }
-.goalcopy { font-size: 15px; color: var(--ink-2); margin-top: 6px; line-height: 1.4; }
-.goalcopy strong { color: var(--ink); font-weight: 600; }
+.herobtn { display: block; width: 100%; text-align: left; }
+.herobtn:active { opacity: .7; }
 
 /* ---------- bars ---------- */
 .meter { height: 6px; border-radius: 3px; background: var(--track); position: relative; margin-top: 8px; overflow: visible; }
@@ -229,7 +221,7 @@ button.row:active, .row.tap:active { background: var(--surface-2); }
 .navbar .t { font-weight: 600; font-size: 17px; }
 .sheet { z-index: 40; animation: sheetin .32s cubic-bezier(.2,.8,.2,1); }
 @keyframes sheetin { from { transform: translateY(40%); opacity: 0; } }
-.sheet .navbar { background: var(--bg); }
+.page .navbar, .sheet .navbar { background: var(--bg); margin: 0 -16px; padding: 0 8px; }
 
 .amount { display: flex; align-items: center; justify-content: center; gap: 2px; padding: 18px 0 8px; }
 .amount span { font-family: var(--num); font-size: 40px; color: var(--ink-3); font-weight: 500; }
@@ -452,7 +444,9 @@ function parse(raw) {
   if (ih) for (let r = ih[0] + 1; r < inv.length; r++) {
     const row = inv[r] || [];
     if (!row[0]) break;
-    holdings.push({ account: row[0], name: row[1] || '', ticker: row[2] || '', shares: num(row[3]), price: num(row[6] != null ? row[6] : row[4]), value: num(row[7]), role: row[8] || '', pct: num(row[9]) });
+    const opt = (v) => (typeof v === 'number' ? v : null);
+    holdings.push({ account: row[0], name: row[1] || '', ticker: row[2] || '', shares: num(row[3]), price: num(row[6] != null ? row[6] : row[4]), value: num(row[7]), role: row[8] || '', pct: num(row[9]),
+      dayPct: opt(row[10]), dayAmt: opt(row[11]), ytd: opt(row[12]) });
   }
 
   // 401k
@@ -485,6 +479,13 @@ function parse(raw) {
     history.push({ date: row[0], nw: row[1], cash: num(row[2]), brokerage: num(row[3]), roth: num(row[4]), k401: num(row[5]), cards: num(row[6]), rate: num(row[7]), note: row[8] || '' });
   }
   history.sort((a, b) => (a.date < b.date ? -1 : 1));
+
+  // paychecks read from pay stub emails
+  const paychecks = (raw.paychecks || []).slice(1).filter((r) => r && /^\d{4}-\d{2}-\d{2}$/.test(r[0] || '')).map((r) => {
+    let detail = null; try { detail = r[15] ? JSON.parse(r[15]) : null; } catch (e) {}
+    return { date: r[0], check: String(r[1] || ''), gross: num(r[3]), taxes: num(r[4]), pre: num(r[5]), roth: num(r[6]), other: num(r[7]), net: num(r[8]),
+      match: num(r[9]), eligible: num(r[10]), ytdGross: num(r[12]), ytd401k: num(r[13]), status: r[14] || '', detail };
+  }).sort((a, b) => (a.date < b.date ? -1 : 1));
 
   const netWorth = g('Net worth') || (live && live.nw) || 0;
   const lastSnap = history.length ? history[history.length - 1] : null;
@@ -519,13 +520,14 @@ function parse(raw) {
       return { balance: g(label), who, since: SM.get(who + ' reimbursable tracking starts') || '' };
     })(),
     buckets: { cash: byType('Cash'), cards: byType('Credit card'), taxable: byType('Taxable'), roth: byType('Roth IRA'), k401: byType('401k') },
-    limit401, categories, accounts, budgets, log, spending, holdings, k401, history, live
+    limit401, categories, accounts, budgets, log, spending, holdings, k401, history, live, paychecks, payAfter: raw.payAfter || ''
   };
 }
 
 /* ================= state ================= */
 const S = {
-  tab: LS.get('tab', 'home'),
+  tab: ({ activity: 'spending' })[LS.get('tab', 'home')] || LS.get('tab', 'home'),
+  spendMode: LS.get('spendMode', 'overview'), pageLimit: 100, payIdx: null,
   model: null, updatedAt: 0, loading: false, offline: false, error: '',
   spendYM: null,
   act: { mode: 'list', account: null, q: '', cat: null, ym: null, since: null, limit: 80 },
@@ -580,6 +582,8 @@ const I = {
   trend: '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m4 16 5-5 4 3 7-7"/><path d="M15 7h5v5"/></svg>',
   plus: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
   gear: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
+  wallet: '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M3 10h18"/><path d="M16 14.5h2"/><path d="M6 6V5a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></svg>',
+  chevSm: '<svg width="7" height="12" viewBox="0 0 8 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left:4px;vertical-align:0"><path d="m1 1 6 6-6 6"/></svg>',
   chev: '<svg class="chev" width="8" height="14" viewBox="0 0 8 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m1 1 6 6-6 6"/></svg>',
   back: '<svg width="12" height="20" viewBox="0 0 12 20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2 2 10l8 8"/></svg>',
   left: '<svg width="10" height="16" viewBox="0 0 10 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2 2 8l6 6"/></svg>',
@@ -675,7 +679,7 @@ function headerHTML(title, gear) {
 }
 
 function homeHTML() {
-  const M = S.model; const G = M.goal;
+  const M = S.model;
   const ym = ymNow(); const mi = new Date().getMonth();
   let h = '';
   if (LS.get('justPaired', false) && !STANDALONE) {
@@ -683,35 +687,33 @@ function homeHTML() {
   }
   h += headerHTML('Moneys', true);
 
-  // hero: net worth on the road to the target
+  // hero: net worth, tap for the trend
   const delta = M.lastSnap ? M.netWorth - M.lastSnap.nw : 0;
-  const prog = Math.max(0, Math.min(1, M.netWorth / G.target));
-  const projF = Math.max(0, Math.min(1, (G.projected || 0) / G.target));
-  h += '<section class="hero"><div class="label">Net worth</div><div class="big">' + money(M.netWorth) + '</div>';
+  h += '<button class="hero herobtn" data-act="networth" aria-label="Open net worth trend"><div class="label">Net worth ' + I.chevSm + '</div><div class="big">' + money(M.netWorth) + '</div>';
   if (M.lastSnap) h += '<div class="delta ' + (delta >= 0 ? 'pos' : 'neg') + '">' + signed(delta) + ' <span class="muted" style="font-family:var(--text)">since ' + esc(shortDate(M.lastSnap.date)) + '</span></div>';
-  h += '<button class="goalbtn" data-act="goals" aria-label="Open net worth and goal details"><div class="track"><div class="rail"></div>' +
-    (projF > prog ? '<div class="pace" style="left:' + (prog * 100) + '%;width:' + ((projF - prog) * 100) + '%"></div>' : '') +
-    '<div class="fill" style="width:' + (prog * 100) + '%"></div>' +
-    (G.projected ? '<div class="ghost" style="left:' + (projF * 100) + '%"></div>' : '') +
-    '<div class="now" style="left:' + (prog * 100) + '%"></div><div class="end"></div></div>' +
-    '<div class="tracklabels"><span style="left:0">Today<b>' + pct(prog) + '</b></span>' +
-    (G.projected ? '<span style="left:' + Math.min(projF * 100, 74) + '%;transform:translateX(-50%)">' + G.year + ' pace<b>' + compact(G.projected) + '</b></span>' : '') +
-    '<span style="right:0;text-align:right">Goal<b>' + compact(G.target) + '</b></span></div>' +
-    '<div class="goalcopy">' + (G.needed && G.pace ? (G.pace >= G.needed
-      ? 'Saving <strong>' + compact(G.pace) + '</strong> a year. That clears the <strong>' + compact(G.needed) + '</strong> a year ' + compact(G.target) + ' by ' + G.year + ' needs.'
-      : 'Saving <strong>' + compact(G.pace) + '</strong> a year. ' + compact(G.target) + ' by ' + G.year + ' takes <strong>' + compact(G.needed) + '</strong>.') : '') + '</div></button></section>';
+  h += '</button>';
 
   // this month
   const sp = M.spending; const inYear = sp.year === new Date().getFullYear();
   const keptRow = sp.named['Kept (income minus spending)']; const k401Row = sp.named['401k contributions (yours + match)'];
   const kept = inYear && keptRow ? keptRow.vals[mi] || 0 : 0;
   const k401m = inYear && k401Row ? k401Row.vals[mi] || 0 : 0;
-  h += '<section class="section"><div class="section-h"><h2>' + MONTH[mi] + '</h2><button class="aside" data-act="tab" data-tab="spending">Details</button></div><div class="group">';
+  h += '<section class="section"><div class="section-h"><h2>' + MONTH[mi] + '</h2><button class="aside" data-act="tab" data-tab="spending" data-mode="overview">Details</button></div><div class="group">';
   h += '<div class="row"><div class="main"><div class="lbl">Net this month</div><div class="sub">' + (k401m ? 'Incl. ' + money(k401m) + ' to your 401k' : 'Income minus spending') + '</div></div><div class="val ' + (kept >= 0 ? 'pos' : 'neg') + '">' + signed(kept) + '</div></div>';
   const vsAvg = M.avgMonth - M.spentMonth;
-  h += '<button class="row" data-act="tab" data-tab="spending"><div class="main"><div class="lbl">Spent</div><div class="sub">' + (M.avgMonth ? (vsAvg >= 0 ? money(vsAvg) + ' under your average month' : money(-vsAvg) + ' over your average month') : '') + '</div></div><div class="val">' + money(M.spentMonth) + '</div>' + I.chev + '</button>';
-  h += '<button class="row" data-act="tab" data-tab="activity" data-mode="accounts"><div class="main"><div class="lbl">Free to spend</div><div class="sub">' + money(M.cashBank) + ' cash, ' + money(Math.abs(M.cards)) + ' on cards</div></div><div class="val">' + money(M.free) + '</div>' + I.chev + '</button>';
+  h += '<button class="row" data-act="tab" data-tab="spending" data-mode="overview"><div class="main"><div class="lbl">Spent</div><div class="sub">' + (M.avgMonth ? (vsAvg >= 0 ? money(vsAvg) + ' under your average month' : money(-vsAvg) + ' over your average month') : '') + '</div></div><div class="val">' + money(M.spentMonth) + '</div>' + I.chev + '</button>';
+  h += '<button class="row" data-act="tab" data-tab="accounts"><div class="main"><div class="lbl">Free to spend</div><div class="sub">' + money(M.cashBank) + ' cash, ' + money(Math.abs(M.cards)) + ' on cards</div></div><div class="val">' + money(M.free) + '</div>' + I.chev + '</button>';
   h += '</div></section>';
+
+  // last paycheck
+  const pays = M.paychecks.filter((p) => p.gross > 0);
+  if (pays.length) {
+    const p = pays[pays.length - 1];
+    const auto = /^Logged/.test(p.status);
+    h += '<section class="section"><div class="section-h"><h2>Last paycheck</h2><span class="aside">' + esc(shortDate(p.date)) + (auto ? ', logged for you' : '') + '</span></div><div class="group">' +
+      '<button class="row" data-act="paycheck"><div class="main"><div class="lbl">Take-home</div><div class="sub">From ' + money2(p.gross) + ' gross</div></div><div class="val">' + money2(p.net) + '</div>' + I.chev + '</button>' +
+      '<button class="row" data-act="paycheck"><div class="main"><div class="lbl">Into your 401k</div><div class="sub">You ' + money2(p.pre + p.roth) + ', match ' + money2(p.match) + '</div></div><div class="val">' + money2(p.pre + p.roth + p.match) + '</div>' + I.chev + '</button></div></section>';
+  }
 
   // budgets
   if (M.budgets.length) {
@@ -722,6 +724,8 @@ function homeHTML() {
 
   // things to handle
   const alerts = [];
+  const review = M.paychecks.filter((p) => /review/i.test(p.status) && (Date.now() - (parseISO(p.date) || 0)) < 60 * 864e5);
+  review.forEach((p) => alerts.push('<button class="row" data-act="paycheck" data-date="' + esc(p.date) + '"><div class="main"><div class="lbl">Pay stub needs a look</div><div class="sub">' + esc(shortDate(p.date)) + ': ' + esc(p.status.replace(/^Needs review:\s*/i, '')) + '</div></div>' + I.chev + '</button>'));
   if (M.owed.balance) {
     const owes = M.owed.balance < 0; const who = esc(M.owed.who);
     alerts.push('<button class="row" data-act="drill" data-cat="Reimbursable" data-since="' + esc(M.owed.since) + '"><div class="main"><div class="lbl">' + (owes ? who + ' owes you' : 'You owe ' + who) + '</div><div class="sub">Reimbursable since ' + esc(shortDate(M.owed.since) || 'tracking started') + '</div></div><div class="val">' + money2(Math.abs(M.owed.balance)) + '</div>' + I.chev + '</button>');
@@ -731,38 +735,53 @@ function homeHTML() {
   if (alerts.length) h += '<section class="section"><div class="group">' + alerts.join('') + '</div></section>';
 
   // recent
-  h += '<section class="section"><div class="section-h"><h2>Recent</h2><button class="aside" data-act="tab" data-tab="activity">See all</button></div>';
+  h += '<section class="section"><div class="section-h"><h2>Recent</h2><button class="aside" data-act="tab" data-tab="spending" data-mode="tx">See all</button></div>';
   h += '<div class="group">' + (M.log.slice(0, 6).map((t) => txRow(t)).join('') || '<div class="empty">Nothing logged yet.</div>') + '</div></section>';
   return h;
 }
 
-function activityHTML() {
-  const M = S.model; const A = S.act;
-  let h = headerHTML('Activity');
-  h += '<div class="seg" role="tablist"><button class="' + (A.mode === 'list' ? 'on' : '') + '" data-act="actmode" data-mode="list">Transactions</button><button class="' + (A.mode === 'accounts' ? 'on' : '') + '" data-act="actmode" data-mode="accounts">Accounts</button></div>';
-  if (A.mode === 'accounts') {
-    const groups = [['Cash', 'Bank accounts'], ['Credit card', 'Credit cards'], ['Taxable', 'Investments'], ['Roth IRA', null], ['401k', null]];
-    const used = new Set();
-    let inv = '';
-    groups.forEach(([type, title]) => {
-      const list = M.accounts.filter((a) => a.type === type);
-      list.forEach((a) => used.add(a.name));
-      if (!list.length) return;
-      const rows = list.map((a) => {
-        const isInv = /Taxable|Roth|401k/.test(type);
-        return '<button class="row" data-act="' + (isInv ? 'tab' : 'acct') + '" data-tab="investing" data-acct="' + esc(a.name) + '"><div class="main"><div class="lbl">' + esc(a.name) + '</div><div class="sub">' + esc(a.where) + '</div></div><div class="val">' + money2(a.balance) + '</div>' + I.chev + '</button>';
-      }).join('');
-      if (title === 'Investments' || !title) { inv += rows; return; }
-      const total = list.reduce((s, a) => s + a.balance, 0);
-      h += '<section class="section" style="margin-top:12px"><div class="section-h"><h2>' + title + '</h2><span class="aside num">' + money(total) + '</span></div><div class="group">' + rows + '</div></section>';
-    });
-    const other = M.accounts.filter((a) => !used.has(a.name));
-    if (other.length) inv += other.map((a) => '<div class="row"><div class="main"><div class="lbl">' + esc(a.name) + '</div></div><div class="val">' + money2(a.balance) + '</div></div>').join('');
-    if (inv) h += '<section class="section" style="margin-top:12px"><div class="section-h"><h2>Investments</h2><span class="aside num">' + money(M.buckets.taxable + M.buckets.roth + M.buckets.k401) + '</span></div><div class="group">' + inv + '</div></section>';
-    h += '<section class="section"><div class="group"><div class="row"><div class="main"><div class="lbl" style="font-weight:600">Net worth</div></div><div class="val" style="font-weight:600">' + money2(M.netWorth) + '</div></div></div></section>';
-    return h;
+function accountsHTML() {
+  const M = S.model;
+  let h = headerHTML('Accounts');
+  const groups = [['Cash', 'Bank accounts'], ['Credit card', 'Credit cards']];
+  groups.forEach(([type, title], gi) => {
+    const list = M.accounts.filter((a) => a.type === type);
+    if (!list.length) return;
+    const total = list.reduce((s, a) => s + a.balance, 0);
+    h += '<section class="section"' + (gi === 0 ? ' style="margin-top:4px"' : '') + '><div class="section-h"><h2>' + title + '</h2><span class="aside num">' + money(total) + '</span></div><div class="group">' +
+      list.map((a) => '<button class="row" data-act="acctpage" data-acct="' + esc(a.name) + '"><div class="main"><div class="lbl">' + esc(a.name) + '</div><div class="sub">' + esc(a.where) + '</div></div><div class="val">' + money2(a.balance) + '</div>' + I.chev + '</button>').join('') + '</div></section>';
+  });
+  const inv = M.accounts.filter((a) => !/^(Cash|Credit card)$/.test(a.type));
+  if (inv.length) {
+    h += '<section class="section"><div class="section-h"><h2>Investments</h2><span class="aside num">' + money(inv.reduce((s, a) => s + a.balance, 0)) + '</span></div><div class="group">' +
+      inv.map((a) => '<button class="row" data-act="tab" data-tab="investing"><div class="main"><div class="lbl">' + esc(a.name) + '</div><div class="sub">' + esc(a.where) + '</div></div><div class="val">' + money2(a.balance) + '</div>' + I.chev + '</button>').join('') + '</div></section>';
   }
-  h += '<label class="search">' + I.search + '<input id="q" type="search" placeholder="Search" value="' + esc(A.q) + '" autocomplete="off" enterkeyhint="search"></label>';
+  h += '<section class="section"><div class="group"><div class="row"><div class="main"><div class="lbl" style="font-weight:600">Net worth</div></div><div class="val" style="font-weight:600">' + money2(M.netWorth) + '</div></div></div></section>';
+  return h;
+}
+
+function accountPageHTML(name) {
+  const M = S.model;
+  const a = M.accounts.find((x) => x.name === name) || { name, where: '', balance: 0 };
+  const ym = ymNow();
+  let inn = 0, out = 0;
+  M.log.forEach((t) => {
+    if (t.ym !== ym || (t.account !== name && t.to !== name)) return;
+    const v = txSign(t, name); if (v > 0) inn += v; else out -= v;
+  });
+  const list = M.log.filter((t) => t.account === name || t.to === name);
+  let h = '<div class="navbar"><button data-act="back">' + I.back + ' Accounts</button><span></span><span style="width:60px"></span></div>';
+  h += '<section class="hero" style="padding-top:4px"><div class="label">' + esc(a.name) + '</div><div class="big">' + money2(a.balance) + '</div><div class="delta muted" style="font-family:var(--text)">' + esc(a.where) + '</div></section>';
+  h += '<section class="section" style="margin-top:18px"><div class="group"><div class="row"><div class="main"><div class="lbl">In this month</div></div><div class="val pos">+' + money2(inn) + '</div></div>' +
+    '<div class="row"><div class="main"><div class="lbl">Out this month</div></div><div class="val">' + MINUS + money2(out) + '</div></div></div></section>';
+  h += '<div style="margin-top:10px">' + txList(list, name, S.pageLimit) + '</div>';
+  if (list.length > S.pageLimit) h = h.replace('data-act="more"', 'data-act="morepage"');
+  return h;
+}
+
+function txPanelHTML() {
+  const M = S.model; const A = S.act;
+  let h = '<label class="search">' + I.search + '<input id="q" type="search" placeholder="Search" value="' + esc(A.q) + '" autocomplete="off" enterkeyhint="search"></label>';
   const cash = M.accounts.filter((a) => /Cash|Credit/.test(a.type));
   h += '<div class="chips"><button class="chip' + (!A.account ? ' on' : '') + '" data-act="acct" data-acct="">All</button>' +
     cash.map((a) => '<button class="chip' + (A.account === a.name ? ' on' : '') + '" data-act="acct" data-acct="' + esc(a.name) + '">' + esc(short(a.name)) + '</button>').join('') + '</div>';
@@ -773,27 +792,14 @@ function activityHTML() {
       (A.since ? '<button class="chip on x" data-act="clearf" data-f="since">Since ' + esc(shortDate(A.since)) + '</button>' : '') + '</div>';
   }
   const list = filteredLog();
-  if (A.account) {
-    const a = M.accounts.find((x) => x.name === A.account);
-    const ym = ymNow();
-    let inn = 0, out = 0;
-    M.log.forEach((t) => {
-      if (t.ym !== ym) return;
-      let v = null;
-      if (t.account === A.account) v = t.signed; else if (t.to === A.account) v = t.refund ? -Math.abs(t.signed) : Math.abs(t.signed);
-      if (v == null) return; if (v > 0) inn += v; else out -= v;
-    });
-    h += '<div class="group" style="margin-top:12px"><div class="row"><div class="main"><div class="lbl">Balance</div><div class="sub">' + esc(a ? a.where : '') + '</div></div><div class="val" style="font-size:20px;font-weight:600">' + money2(a ? a.balance : 0) + '</div></div>' +
-      '<div class="row"><div class="main"><div class="lbl">In this month</div></div><div class="val pos">+' + money2(inn) + '</div></div>' +
-      '<div class="row"><div class="main"><div class="lbl">Out this month</div></div><div class="val">' + MINUS + money2(out) + '</div></div></div>';
-  }
-  if (A.cat || A.q) {
+  if (A.cat || A.q || A.account) {
     const tot = list.reduce((s, t) => s + (A.account ? txSign(t, A.account) : t.signed), 0);
     h += '<div class="foot" style="padding-top:12px">' + list.length + ' transaction' + (list.length === 1 ? '' : 's') + ', net ' + signed(tot, true) + '</div>';
   }
   h += txList(list, A.account, A.limit);
   return h;
 }
+
 function txSign(t, acct) { if (t.account === acct) return t.signed; if (t.to === acct) return t.refund ? -Math.abs(t.signed) : Math.abs(t.signed); return 0; }
 function filteredLog() {
   const A = S.act; const q = A.q.trim().toLowerCase();
@@ -818,6 +824,8 @@ function spendingHTML() {
   const mi = +S.spendYM.slice(5, 7) - 1;
   const v = (name) => { const r = sp.named[name]; return r ? r.vals[mi] || 0 : 0; };
   let h = headerHTML('Spending');
+  h += '<div class="seg" role="tablist"><button class="' + (S.spendMode !== 'tx' ? 'on' : '') + '" data-act="spendmode" data-mode="overview">Overview</button><button class="' + (S.spendMode === 'tx' ? 'on' : '') + '" data-act="spendmode" data-mode="tx">Transactions</button></div>';
+  if (S.spendMode === 'tx') return h + txPanelHTML();
   h += '<div class="monthnav"><button data-act="month" data-d="-1" ' + (mi <= 0 ? 'disabled' : '') + ' aria-label="Previous month">' + I.left + '</button><span class="m">' + MONTH[mi] + ' ' + sp.year + '</span><button data-act="month" data-d="1" ' + (mi >= lastIdx ? 'disabled' : '') + ' aria-label="Next month">' + I.right + '</button></div>';
 
   const spent = v('Total spending'); const income = v('Total income'); const kept = v('Kept (income minus spending)'); const rate = v('Savings rate');
@@ -893,83 +901,127 @@ function spendingHTML() {
 function investingHTML() {
   const M = S.model; const H = M.holdings;
   const total = H.reduce((s, x) => s + x.value, 0);
-  const role = (r) => H.filter((x) => x.role === r).reduce((s, x) => s + x.value, 0);
-  const core = role('Core'), sat = role('Satellite'), cash = total - core - sat;
+  const day = H.reduce((s, x) => s + (x.dayAmt || 0), 0);
+  const dayBase = total - day;
   let h = headerHTML('Investing');
-  h += '<section class="hero" style="padding-top:0"><div class="label">Brokerage, Roth IRA and 401k</div><div class="big">' + money(total + M.k401.value) + '</div></section>';
-  if (total) {
-    h += '<section class="section" style="margin-top:18px"><div class="section-h"><h2>Core and satellite</h2><span class="aside">Brokerage + Roth</span></div><div class="group" style="padding-top:14px">' +
-      '<div class="split" role="img" aria-label="Core ' + pct(core / total) + ', satellite ' + pct(sat / total) + ', cash ' + pct(cash / total) + '"><i style="width:' + (core / total * 100) + '%;background:var(--pine)"></i><i style="width:' + (sat / total * 100) + '%;background:var(--sky)"></i>' + (cash > 0 ? '<i style="width:' + (cash / total * 100) + '%;background:var(--ink-3)"></i>' : '') + '</div>' +
-      '<div class="legend"><span><i style="background:var(--pine)"></i>Core <b>' + pct(core / total) + '</b></span><span><i style="background:var(--sky)"></i>Satellite <b>' + pct(sat / total) + '</b></span>' + (cash > 0 ? '<span><i style="background:var(--ink-3)"></i>Cash <b>' + pct(cash / total) + '</b></span>' : '') + '</div></div></section>';
-  }
+  h += '<section class="hero" style="padding-top:0"><div class="label">Brokerage, Roth IRA and 401k</div><div class="big">' + money(total + M.k401.value) + '</div>' +
+    (H.some((x) => x.dayAmt != null) ? '<div class="delta ' + (day >= 0 ? 'pos' : 'neg') + '">' + signed(day, true) + ' <span class="muted" style="font-family:var(--text)">today, ' + (day >= 0 ? '+' : MINUS) + pct(Math.abs(day / (dayBase || 1)), 2) + '</span></div>' : '') + '</section>';
   const accts = [...new Set(H.map((x) => x.account))];
   accts.forEach((a) => {
     const list = H.filter((x) => x.account === a).sort((p, q) => q.value - p.value);
     const sum = list.reduce((s, x) => s + x.value, 0);
+    const dsum = list.reduce((s, x) => s + (x.dayAmt || 0), 0);
     h += '<section class="section"><div class="section-h"><h2>' + esc(a) + '</h2><span class="aside num">' + money(sum) + '</span></div><div class="group">';
     list.forEach((x) => {
       const isCash = x.ticker === 'CASH';
+      const dayTxt = x.dayPct == null ? '' : '<small class="' + (x.dayPct >= 0 ? 'pos' : 'neg') + '">' + (x.dayPct >= 0 ? '+' : MINUS) + pct(Math.abs(x.dayPct), 2) + ' today</small>';
       h += '<div class="row"><div class="main"><div class="lbl"><strong style="font-weight:600">' + esc(isCash ? 'Cash' : x.ticker) + '</strong> <span class="muted" style="font-size:14px">' + esc(isCash ? 'Uninvested' : x.name) + '</span></div>' +
-        '<div class="sub">' + (isCash ? 'Waiting to be invested' : '<span>' + (Math.round(x.shares * 1000) / 1000) + ' sh at ' + money2(x.price) + '</span><span class="acct">' + esc(x.role) + '</span>') + '</div></div>' +
-        '<div class="val">' + money(x.value) + '<small>' + pct(x.value / (total || 1)) + '</small></div></div>';
+        '<div class="sub">' + (isCash ? 'Waiting to be invested' : '<span>' + (Math.round(x.shares * 1000) / 1000) + ' sh at ' + money2(x.price) + '</span>' + (x.ytd != null ? '<span class="acct">' + (x.ytd >= 0 ? '+' : MINUS) + pct(Math.abs(x.ytd)) + ' this year</span>' : '')) + '</div></div>' +
+        '<div class="val">' + money(x.value) + dayTxt + '</div></div>';
     });
-    h += '</div></section>';
+    h += '</div>' + (list.some((x) => x.dayAmt != null) ? '<div class="foot">' + signed(dsum, true) + ' today across ' + esc(a) + '</div>' : '') + '</section>';
   });
   const K = M.k401;
   const lim = M.limit401 || 24500;
   const kName = (M.accounts.find((a) => a.type === '401k') || { name: '401k' }).name;
+  const lastPay = M.paychecks.filter((p) => p.gross > 0).slice(-1)[0];
+  let split = '';
+  if (lastPay && lastPay.detail && lastPay.detail.d) {
+    const pre = lastPay.detail.d.filter((d) => /PTX|401K|CAP/i.test(d[0]) && !/RTH|ROTH/i.test(d[0])).reduce((s, d) => s + d[2], 0);
+    const roth = lastPay.detail.d.filter((d) => /RTH|ROTH/i.test(d[0])).reduce((s, d) => s + d[2], 0);
+    if (pre || roth) split = 'Pre-tax ' + money(pre) + ', Roth ' + money(roth);
+  }
   h += '<section class="section"><div class="section-h"><h2>' + esc(kName) + '</h2><span class="aside num">' + money(K.value) + '</span></div><div class="group">' +
-    '<div class="budget"><div class="top"><span>Your contributions</span><span class="num">' + money(K.you) + ' of ' + money(lim) + '</span></div><div class="meter"><i style="width:' + Math.min(100, K.you / lim * 100).toFixed(1) + '%"></i></div><div class="bottom"><span>' + new Date().getFullYear() + ' limit</span><span>' + money(Math.max(0, lim - K.you)) + ' of room left</span></div></div>' +
-    '<div class="row"><div class="main"><div class="lbl">Employer match</div><div class="sub">This year</div></div><div class="val">' + money(K.match) + '</div></div>';
+    '<div class="budget"><div class="top"><span>Your contributions</span><span class="num">' + money(K.you) + ' of ' + money(lim) + '</span></div><div class="meter"><i style="width:' + Math.min(100, K.you / lim * 100).toFixed(1) + '%"></i></div><div class="bottom"><span>' + (split || new Date().getFullYear() + ' limit') + '</span><span>' + money(Math.max(0, lim - K.you)) + ' of room left</span></div></div>' +
+    '<div class="row"><div class="main"><div class="lbl">Employer match</div><div class="sub">4% of your eligible pay, this year</div></div><div class="val">' + money(K.match) + '</div></div>';
   if (K.months.length) {
     const ms = K.months.slice(-12);
     h += '<div class="row" style="padding-bottom:0;min-height:0"><div class="main"><div class="lbl">Each month</div><div class="sub">You plus match, tap a bar</div></div></div>' +
       colsChart('k401', ms.map((m) => m.total), ms.map((m) => m.label.slice(0, 1)), { label: 'Monthly 401k contributions' });
   }
   h += '</div>' + (K.note ? '<div class="foot">' + esc(K.note) + '</div>' : '') + '</section>';
-  h += '<div class="foot" style="margin-top:18px">Prices come from Google Finance in your sheet and can lag about 20 minutes. Share counts change in the Investments tab.</div>';
+  h += '<div class="foot" style="margin-top:18px">Prices and daily changes come from Google Finance in your sheet and can lag about 20 minutes. "This year" is each fund\'s price change since Dec 31, not your own return.</div>';
   return h;
 }
 
 /* ================= pushed pages ================= */
-function goalsHTML() {
-  const M = S.model; const G = M.goal;
+function networthHTML() {
+  const M = S.model;
   let h = '<div class="navbar"><button data-act="back">' + I.back + ' Home</button><span></span><span style="width:60px"></span></div>';
   h += '<section class="hero" style="padding-top:4px"><div class="label">Net worth</div><div class="big">' + money(M.netWorth) + '</div></section>';
-
-  // trend line: saved snapshots plus right now
   const pts = M.history.map((x) => ({ date: x.date, v: x.nw, live: false }));
   pts.push({ date: todayISO(), v: M.netWorth, live: true });
   h += '<section class="section" style="margin-top:16px"><div class="section-h"><h2>Trend</h2><span class="aside">' + (pts.length - 1) + ' saved snapshot' + (pts.length === 2 ? '' : 's') + '</span></div><div class="group">' + lineChart(pts) + '</div>' +
     '<div class="foot">A snapshot saves on the 1st of each month. The hollow dot is right now.</div></section>';
-
-  const prog = M.netWorth / G.target;
-  h += '<section class="section"><div class="section-h"><h2>' + compact(G.target) + ' by ' + G.year + '</h2><span class="aside">' + pct(prog) + ' there</span></div><div class="group">' +
-    '<div class="budget"><div class="meter"><i style="width:' + Math.min(100, prog * 100).toFixed(1) + '%"></i>' + (G.projected ? '<b style="left:' + Math.min(100, G.projected / G.target * 100).toFixed(1) + '%"></b>' : '') + '</div><div class="bottom"><span>Today ' + compact(M.netWorth) + '</span><span>' + G.year + ' pace ' + compact(G.projected) + '</span></div></div>' +
-    '<div class="row"><div class="main"><div class="lbl">Projected at end of ' + G.year + '</div></div><div class="val">' + money(G.projected) + '</div></div>' +
-    '<div class="row"><div class="main"><div class="lbl">' + (G.gap > 0 ? 'Short of goal' : 'Ahead of goal') + '</div></div><div class="val ' + (G.gap > 0 ? 'neg' : 'pos') + '">' + money(Math.abs(G.gap)) + '</div></div>' +
-    '<div class="row"><div class="main"><div class="lbl">Your savings pace</div><div class="sub">Per year</div></div><div class="val">' + money(G.pace) + '</div></div>' +
-    '<div class="row"><div class="main"><div class="lbl">Needed to hit it</div><div class="sub">Per year</div></div><div class="val">' + money(G.needed) + '</div></div>' +
-    (G.yearsLeft ? '<div class="row"><div class="main"><div class="lbl">Time left</div></div><div class="val">' + (Math.round(G.yearsLeft * 10) / 10) + ' years</div></div>' : '') +
-    '</div><div class="foot">Assumes a ' + pct(G.ret) + ' return and this year\'s savings pace held steady. Change the inputs in Settings.</div></section>';
-
   const B = M.buckets; const nw = M.netWorth || 1;
   const parts = [['Brokerage', B.taxable], ['Roth IRA', B.roth], ['401k', B.k401], ['Cash', B.cash], ['Credit cards', B.cards]];
   h += '<section class="section"><div class="section-h"><h2>Where it is</h2></div><div class="group">' +
     parts.filter((p) => p[1]).map((p) => '<div class="row"><div class="main"><div class="lbl">' + p[0] + '</div></div><div class="val">' + money(p[1]) + '<small>' + (p[1] > 0 ? pct(p[1] / nw) : '') + '</small></div></div>').join('') + '</div></section>';
-
   const keptRow = M.spending.named['Kept (income minus spending)'];
   if (keptRow) {
     const last = M.spending.year === new Date().getFullYear() ? new Date().getMonth() : 11;
     h += '<section class="section"><div class="section-h"><h2>Kept each month</h2><span class="aside">Savings rate ' + pct(M.year.rate) + '</span></div><div class="group">' +
       colsChart('kept', keptRow.vals.map((x, i) => (i > last ? null : x || 0)), MON.map((m) => m[0]), { avg: keptRow.avg, label: 'Money kept each month' }) + '</div></section>';
   }
-
   if (M.history.length) {
     h += '<section class="section"><div class="section-h"><h2>Snapshots</h2></div><div class="group">' +
       M.history.slice().reverse().map((x) => '<div class="row"><div class="main"><div class="lbl">' + esc(shortDate(x.date)) + ', ' + x.date.slice(0, 4) + '</div>' + (x.note ? '<div class="sub">' + esc(x.note) + '</div>' : '') + '</div><div class="val">' + money(x.nw) + '</div></div>').join('') + '</div></section>';
   }
   h += '<section class="section"><button class="btn ghost" data-act="snapshot">Save a snapshot now</button></section>';
+  return h;
+}
+
+const PAY_NAMES = { 'SICK LVE': 'Sick leave', BEREAVEM: 'Bereavement', REGULAR: 'Regular', OVERTIME: 'Overtime', HOLIDAY: 'Holiday', FITNESS: 'Fitness reimbursement', VACATION: 'Vacation', VACATN: 'Vacation' };
+const titleCase = (s) => PAY_NAMES[String(s).toUpperCase()] || String(s).toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase());
+function paycheckHTML() {
+  const M = S.model;
+  const pays = M.paychecks.filter((p) => p.gross > 0);
+  let h = '<div class="navbar"><button data-act="back">' + I.back + ' Home</button><span></span><span style="width:60px"></span></div>';
+  if (!pays.length) {
+    return h + '<div class="empty" style="margin-top:40px">No pay stubs read yet. Run setup() in your Apps Script once to turn on the pay stub reader.</div>' +
+      '<section class="section"><button class="btn ghost" data-act="paystubs">Check email for pay stubs</button></section>';
+  }
+  const idx = S.payIdx != null && pays[S.payIdx] ? S.payIdx : pays.length - 1;
+  const p = pays[idx]; const D = p.detail || {};
+  const k401 = p.pre + p.roth;
+  h += '<section class="hero" style="padding-top:4px"><div class="label">Take-home</div><div class="big">' + money2(p.net) + '</div><div class="delta muted" style="font-family:var(--text)">Paid ' + esc(shortDate(p.date)) +
+    (D.ps && D.pe ? ' for ' + esc(shortDate(D.ps)) + ' to ' + esc(shortDate(D.pe)) : '') + '</div></section>';
+
+  const seg = [['Take-home', p.net, 'var(--pine)'], ['401k', k401, 'var(--sky)'], ['Taxes', p.taxes, 'var(--ink-3)'], ['Benefits and other', p.other, 'var(--amber)']].filter((x) => x[1] > 0.004);
+  const dot = (c) => '<i style="display:inline-block;width:10px;height:10px;border-radius:3px;background:' + c + ';margin-right:8px"></i>';
+  h += '<section class="section" style="margin-top:18px"><div class="section-h"><h2>Where ' + money2(p.gross) + ' went</h2></div><div class="group" style="padding-top:14px">' +
+    '<div class="split" role="img" aria-label="' + esc(seg.map((x) => x[0] + ' ' + money(x[1])).join(', ')) + '">' + seg.map((x) => '<i style="width:' + (x[1] / p.gross * 100).toFixed(2) + '%;background:' + x[2] + '"></i>').join('') + '</div>' +
+    '<div style="height:8px"></div>';
+  const taxSub = (D.t || []).filter((t) => t[1]).map((t) => t[0].replace(/^State WH \((\w+)\)/, '$1 state').replace(/ Tax$/, '') + ' ' + money2(t[1])).join(', ');
+  const otherSub = (D.d || []).filter((d) => !/PTX|RTH|ROTH|401K|CAP/i.test(d[0]) && d[1]).map((d) => titleCase(d[0]) + ' ' + money2(d[1])).join(', ');
+  h += '<div class="row"><div class="main"><div class="lbl">Gross pay</div><div class="sub wrap">' + esc(((D.e || []).map((e) => titleCase(e[0])).filter((v, i, a) => a.indexOf(v) === i).join(', '))) + '</div></div><div class="val">' + money2(p.gross) + '</div></div>' +
+    '<div class="row"><div class="main"><div class="lbl">' + dot('var(--ink-3)') + 'Taxes</div><div class="sub wrap">' + esc(taxSub) + '</div></div><div class="val">' + MINUS + money2(p.taxes) + '</div></div>' +
+    '<div class="row"><div class="main"><div class="lbl">' + dot('var(--sky)') + '401k</div><div class="sub">Pre-tax ' + money2(p.pre) + ', Roth ' + money2(p.roth) + '</div></div><div class="val">' + MINUS + money2(k401) + '</div></div>' +
+    (p.other ? '<div class="row"><div class="main"><div class="lbl">' + dot('var(--amber)') + 'Benefits and other</div><div class="sub wrap">' + esc(otherSub) + '</div></div><div class="val">' + MINUS + money2(p.other) + '</div></div>' : '') +
+    '<div class="row"><div class="main"><div class="lbl" style="font-weight:600">' + dot('var(--pine)') + 'Take-home</div></div><div class="val" style="font-weight:600">' + money2(p.net) + '</div></div></div></section>';
+
+  const excluded = p.gross - p.eligible;
+  h += '<section class="section"><div class="group"><div class="row"><div class="main"><div class="lbl">Employer match</div><div class="sub wrap">4% of ' + money2(p.eligible) + (excluded > 0.5 ? ', ' + money2(excluded) + ' of reimbursements left out' : '') + '</div></div><div class="val pos">+' + money2(p.match) + '</div></div></div></section>';
+
+  if ((D.p || []).length) {
+    h += '<section class="section"><div class="section-h"><h2>Deposits</h2>' + (/^Logged/.test(p.status) ? '<span class="aside">Logged for you</span>' : '') + '</div><div class="group">' +
+      D.p.map((d) => '<div class="row"><div class="main"><div class="lbl">' + esc(d[3] || titleCase(d[0])) + '</div><div class="sub"><span>Account ending ' + esc(d[1]) + '</span>' + (d[4] ? '<span class="acct">' + esc(d[4] === 'logged' ? 'Added to Log' : d[4] === 'already in Log' ? 'Already in Log' : d[4]) + '</span>' : '') + '</div></div><div class="val">' + money2(d[2]) + '</div></div>').join('') + '</div></section>';
+  }
+  if ((D.e || []).length) {
+    h += '<section class="section"><div class="section-h"><h2>Earnings</h2></div><div class="group">' +
+      D.e.map((e) => '<div class="row"><div class="main"><div class="lbl">' + esc(titleCase(e[0])) + '</div>' + (e[1] ? '<div class="sub">' + e[1] + ' hours</div>' : '') + '</div><div class="val">' + money2(e[2]) + '</div></div>').join('') + '</div></section>';
+  }
+  const ytdTax = (D.t || []).reduce((s, t) => s + (t[2] || 0), 0);
+  h += '<section class="section"><div class="section-h"><h2>This year, through ' + esc(shortDate(p.date)) + '</h2></div><div class="group">' +
+    '<div class="row"><div class="main"><div class="lbl">Gross pay</div></div><div class="val">' + money(p.ytdGross) + '</div></div>' +
+    (ytdTax ? '<div class="row"><div class="main"><div class="lbl">Taxes</div></div><div class="val">' + money(ytdTax) + '</div></div>' : '') +
+    '<div class="row"><div class="main"><div class="lbl">Your 401k</div></div><div class="val">' + money(p.ytd401k) + '</div></div>' +
+    (D.yn ? '<div class="row"><div class="main"><div class="lbl">Take-home</div></div><div class="val">' + money(D.yn) + '</div></div>' : '') + '</div></section>';
+
+  h += '<section class="section"><div class="section-h"><h2>All paychecks</h2></div><div class="group">' +
+    pays.map((x, i) => ({ x, i })).reverse().map(({ x, i }) => '<button class="row" data-act="paypick" data-i="' + i + '"><div class="main"><div class="lbl">' + esc(shortDate(x.date)) + (i === idx ? ' <span class="tag">Showing</span>' : '') + '</div><div class="sub">' + esc(/^Logged/.test(x.status) ? 'Logged for you' : x.status) + '</div></div><div class="val">' + money2(x.net) + '</div>' + I.chev + '</button>').join('') + '</div>' +
+    '<div class="foot">New stubs are read from your email every hour. Paychecks before ' + esc(shortDate(M.payAfter) || 'setup') + ' were already in your Log, so they are recorded here for history only.</div></section>';
+  h += '<section class="section"><button class="btn ghost" data-act="paystubs">Check email now</button></section>';
   return h;
 }
 function lineChart(pts) {
@@ -1080,7 +1132,7 @@ function settingsHTML() {
     '<button class="row" data-act="refresh"><div class="main"><div class="lbl">Refresh now</div><div class="sub">Pulls fresh on open and every minute</div></div></button>' +
     '<button class="row" data-act="snapshot"><div class="main"><div class="lbl">Save net worth snapshot</div></div></button></div>';
   h += '<div class="group" style="margin-top:22px"><button class="row" data-act="unpair"><div class="main"><div class="lbl neg">' + (S.sheet.confirmUnpair ? 'Tap again to disconnect' : 'Disconnect this phone') + '</div><div class="sub">You will need the pairing link again</div></div></button></div>';
-  h += '<div class="foot" style="text-align:center;margin-top:18px">Moneys for iPhone, v1</div>';
+  h += '<div class="foot" style="text-align:center;margin-top:18px">Moneys for iPhone, v2</div>';
   return h;
 }
 function confirmHTML() {
@@ -1180,19 +1232,22 @@ function render() {
     tabbar.hidden = true; return;
   }
   const a = document.activeElement;
-  if (a && a.id === 'q' && S.tab === 'activity') { S.renderQueued = true; paintList(); return; }
+  if (a && a.id === 'q' && S.tab === 'spending') { S.renderQueued = true; paintList(); return; }
   tabbar.hidden = false;
   tabbar.innerHTML =
-    tabBtn('home', 'Home', I.home) + tabBtn('activity', 'Activity', I.list) +
+    tabBtn('home', 'Home', I.home) + tabBtn('accounts', 'Accounts', I.wallet) +
     '<button class="add" data-act="add" aria-label="New entry">' + I.plus + '</button>' +
     tabBtn('spending', 'Spending', I.bars) + tabBtn('investing', 'Investing', I.trend);
-  screen.innerHTML = S.tab === 'activity' ? activityHTML() : S.tab === 'spending' ? spendingHTML() : S.tab === 'investing' ? investingHTML() : homeHTML();
+  screen.innerHTML = screenHTML();
   renderPages();
+}
+function screenHTML() {
+  return S.tab === 'accounts' ? accountsHTML() : S.tab === 'spending' ? spendingHTML() : S.tab === 'investing' ? investingHTML() : homeHTML();
 }
 function paintList() {
   // refresh just the list under the search box without stealing focus
   const screen = document.getElementById('screen');
-  const tmp = document.createElement('div'); tmp.innerHTML = activityHTML();
+  const tmp = document.createElement('div'); tmp.innerHTML = screenHTML();
   const keepTop = [...screen.children].findIndex((el) => el.classList && el.classList.contains('search'));
   if (keepTop < 0) return;
   while (screen.children.length > keepTop + 1) screen.removeChild(screen.lastChild);
@@ -1206,9 +1261,11 @@ function renderPages() {
   const top = S.pages[S.pages.length - 1];
   const old = root.querySelector('.page');
   const keep = old && old.dataset.p === top ? old.scrollTop : 0;
-  root.innerHTML = '<div class="page" data-p="' + top + '"><div class="inner">' + (top === 'goals' ? goalsHTML() : '') + '</div></div>';
+  const body = top === 'networth' ? networthHTML() : top === 'paycheck' ? paycheckHTML() : top.startsWith('acct:') ? accountPageHTML(top.slice(5)) : '';
+  root.innerHTML = '<div class="page" data-p="' + esc(top) + '"><div class="inner">' + body + '</div></div>';
   if (keep) { const p = root.querySelector('.page'); p.style.animation = 'none'; p.scrollTop = keep; }
 }
+function pushPage(p) { S.pages.push(p); document.body.classList.add('noscroll'); renderPages(); }
 function go(tab) { S.tab = tab; LS.set('tab', tab); S.pages = []; window.scrollTo(0, 0); render(); }
 
 let toastT;
@@ -1220,23 +1277,33 @@ document.addEventListener('click', (ev) => {
   const d = el.dataset;
   switch (d.act) {
     case 'tab':
-      if (d.mode) S.act.mode = d.mode;
-      if (d.tab === 'activity' && !d.mode) S.act.mode = 'list';
+      if (d.mode) { S.spendMode = d.mode; LS.set('spendMode', d.mode); }
       go(d.tab); break;
     case 'refresh': refresh(true); break;
     case 'settings': S.sheet = { kind: 'settings' }; showSheet(); break;
-    case 'goals': S.pages.push('goals'); document.body.classList.add('noscroll'); renderPages(); break;
+    case 'networth': pushPage('networth'); break;
+    case 'paycheck': {
+      const pays = S.model.paychecks.filter((p) => p.gross > 0);
+      S.payIdx = d.date ? Math.max(0, pays.findIndex((p) => p.date === d.date)) : null;
+      pushPage('paycheck'); break;
+    }
+    case 'paypick': S.payIdx = +d.i; renderPages(); document.querySelector('.page').scrollTop = 0; break;
+    case 'acctpage': S.pageLimit = 100; pushPage('acct:' + d.acct); break;
+    case 'morepage': S.pageLimit += 150; renderPages(); break;
+    case 'spendmode': S.spendMode = d.mode; LS.set('spendMode', d.mode); window.scrollTo(0, 0); render(); break;
+    case 'paystubs':
+      toast('Checking your email');
+      api('paystubs').then((j) => { ingest(j.data); const r = j.result || {}; toast(r.added ? r.added + ' new pay stub' + (r.added === 1 ? '' : 's') : 'No new pay stubs'); }).catch((e) => toast(e.message));
+      break;
     case 'back': S.pages.pop(); if (!S.pages.length) document.body.classList.remove('noscroll'); renderPages(); break;
     case 'add': openAdd(); break;
     case 'edit': openEdit(+d.row); break;
     case 'close': closeSheet(); break;
-    case 'actmode': S.act.mode = d.mode; render(); break;
-    case 'acct':
-      if (S.tab !== 'activity') { S.act = { mode: 'list', account: d.acct || null, q: '', cat: null, ym: null, since: null, limit: 80 }; go('activity'); break; }
-      S.act.mode = 'list'; S.act.account = d.acct || null; S.act.limit = 80; render(); break;
+    case 'acct': S.act.account = d.acct || null; S.act.limit = 80; render(); break;
     case 'drill':
       S.act = { mode: 'list', account: null, q: '', cat: d.cat || null, ym: d.ym || null, since: d.since || null, limit: 200 };
-      go('activity'); break;
+      S.spendMode = 'tx'; LS.set('spendMode', 'tx');
+      go('spending'); break;
     case 'clearf': S.act[d.f] = null; render(); break;
     case 'more': S.act.limit += 150; render(); break;
     case 'month': {
