@@ -950,8 +950,8 @@ function investingHTML() {
     const diff = K.value - p401.balance;
     h += Math.abs(diff) <= 1
       ? '<div class="row"><div class="main"><div class="lbl pos">Matches ' + esc(p401.institution) + '</div><div class="sub">Checked ' + ago(Date.parse(p401.updated)) + '</div></div></div>'
-      : '<div class="row"><div class="main"><div class="lbl" style="color:var(--amber)">' + esc(p401.institution) + ' says ' + money2(p401.balance) + '</div><div class="sub wrap">Your sheet uses ' + money2(K.value) + (K.note && /using contributions/i.test(K.note) ? ' (contributions only, no growth)' : '') + '</div></div></div>' +
-        '<button class="row" data-act="plaidapply" data-id="' + esc(p401.id) + '"><div class="main"><div class="lbl" style="color:var(--pine)">' + (S.confirmApply === p401.id ? 'Tap again to put it in your sheet' : 'Put ' + money2(p401.balance) + ' in your sheet') + '</div></div></button>';
+      : '<div class="row"><div class="main"><div class="lbl" style="color:var(--amber)">' + esc(p401.institution) + ' says ' + money2(p401.balance) + '</div><div class="sub wrap">Your sheet uses ' + money2(K.value) + '. It updates at the next sync.</div></div></div>' +
+        '<button class="row" data-act="plaidapply" data-id="' + esc(p401.id) + '"><div class="main"><div class="lbl" style="color:var(--pine)">' + 'Copy now' + '</div></div></button>';
   }
   if (K.months.length) {
     const ms = K.months.slice(-12);
@@ -960,7 +960,7 @@ function investingHTML() {
   }
   h += '</div>' + (K.note ? '<div class="foot">' + esc(K.note) + '</div>' : '') + '</section>';
   const synced = (M.plaid.accounts || []).filter((x) => x.target === 'Brokerage' || x.target === 'Roth IRA' || x.target === '401k');
-  if (synced.length) h += '<div class="foot" style="margin-top:18px">Your sheet comes first. ' + esc([...new Set(synced.map((x) => x.institution))].join(' and ')) + ' was last checked ' + ago(Math.max(...synced.map((x) => Date.parse(x.updated) || 0))) + ' and only flags differences.</div>';
+  if (synced.length) h += '<div class="foot" style="margin-top:18px">Updated from ' + esc([...new Set(synced.map((x) => x.institution))].join(' and ')) + ' ' + ago(Math.max(...synced.map((x) => Date.parse(x.updated) || 0))) + '. Investments follow your accounts every 4 hours; bank totals still come from your Log.</div>';
   h += '<div class="foot" style="margin-top:' + (synced.length ? 6 : 18) + 'px">Tap a holding to change its shares or cash after you buy, sell, or move money in. Prices and daily changes come from Google Finance in your sheet and can lag about 20 minutes. "This year" is each fund\'s price change since Dec 31, not your own return.</div>';
   return h;
 }
@@ -1154,7 +1154,7 @@ function settingsHTML() {
     '<button class="row" data-act="refresh"><div class="main"><div class="lbl">Refresh now</div><div class="sub">Pulls fresh on open and every minute</div></div></button>' +
     '<button class="row" data-act="snapshot"><div class="main"><div class="lbl">Save net worth snapshot</div></div></button></div>';
   h += '<div class="group" style="margin-top:22px"><button class="row" data-act="unpair"><div class="main"><div class="lbl neg">' + (S.sheet.confirmUnpair ? 'Tap again to disconnect' : 'Disconnect this phone') + '</div><div class="sub">You will need the pairing link again</div></div></button></div>';
-  h += '<div class="foot" style="text-align:center;margin-top:18px">Moneys for iPhone, v5</div>';
+  h += '<div class="foot" style="text-align:center;margin-top:18px">Moneys for iPhone, v6</div>';
   return h;
 }
 function holdingHTML() {
@@ -1168,6 +1168,8 @@ function holdingHTML() {
   h += '<div class="amount">' + (isCash ? '<span>$</span>' : '') + '<input id="h-amt" inputmode="decimal" placeholder="0" value="' + esc(s.val) + '" style="width:' + amtWidth(s.val) + '" aria-label="' + (isCash ? 'Amount' : 'Shares') + '" autocomplete="off">' + (isCash ? '' : '<span style="font-size:22px;margin-left:6px">sh</span>') + '</div>';
   h += '<div class="foot" style="text-align:center;margin-top:-4px">' + (s.mode === 'add' ? (isCash ? 'Use a minus sign for money taken out or invested' : 'Use a minus sign for shares you sold') : 'Copy the exact number from Robinhood') + '</div>';
   h += '<div class="group" style="margin-top:16px"><div class="row"><div class="main"><div class="lbl">New ' + (isCash ? 'cash' : 'total') + '</div>' + (isCash ? '' : '<div class="sub" id="h-sub">' + (Math.round(next * 1e6) / 1e6) + ' shares</div>') + '</div><div class="val" id="h-preview">' + money2(next * x.price) + '</div></div></div>';
+  const drv = plaidFor(x.account);
+  if (drv) h += '<div class="foot">' + esc(x.account) + ' updates from ' + esc(drv.institution) + ' every 4 hours, so a change here gets replaced at the next sync.</div>';
   if (s.err) h += '<div class="err">' + esc(s.err) + '</div>';
   h += '<div style="margin-top:22px"><button class="btn" data-act="saveholding" ' + (ok ? '' : 'disabled') + '>' + (s.busy ? 'Saving' : 'Save to Investments') + '</button></div>';
   return h;
@@ -1238,10 +1240,10 @@ async function deleteTx() {
 }
 
 /* ================= connected accounts (Plaid) ================= */
-const TARGET_LABEL = (t) => !t ? 'Not used' : t === '401k' ? 'Checks your 401k balance' : (t === 'Brokerage' || t === 'Roth IRA') ? 'Checks ' + t + ' shares and cash' : 'Checks ' + t;
+const TARGET_LABEL = (t) => !t ? 'Not used' : t === '401k' ? 'Updates your 401k balance' : (t === 'Brokerage' || t === 'Roth IRA') ? 'Updates ' + t + ' shares and cash' : 'Checks ' + t + ' (your Log stays the total)';
 const plaidFor = (target) => ((S.model.plaid || {}).accounts || []).find((a) => a.target === target) || null;
 const fmtSh = (n) => String(Math.round(n * 1e6) / 1e6);
-// Where the sheet and the real account disagree, line by line. The sheet is never changed here.
+// Where the sheet and the real account disagree, line by line (normally only between syncs).
 function holdingDiffs(account) {
   const p = plaidFor(account); if (!p || !p.holdings) return null;
   const diffs = []; const seen = {};
@@ -1259,12 +1261,12 @@ function checkBlockHTML(account) {
   const r = holdingDiffs(account); if (!r) return '';
   const inst = esc(r.p.institution);
   if (!r.diffs.length) return '<div class="row"><div class="main"><div class="lbl pos">Matches ' + inst + '</div><div class="sub">Checked ' + ago(Date.parse(r.p.updated)) + '</div></div></div>';
-  let h = '<div class="row"><div class="main"><div class="lbl" style="color:var(--amber)">' + inst + ' shows ' + r.diffs.length + ' difference' + (r.diffs.length === 1 ? '' : 's') + '</div><div class="sub wrap">Your sheet stays as is. Tap a line to fix it, or copy them all.</div></div></div>';
+  let h = '<div class="row"><div class="main"><div class="lbl" style="color:var(--amber)">' + inst + ' shows ' + r.diffs.length + ' difference' + (r.diffs.length === 1 ? '' : 's') + '</div><div class="sub wrap">These get copied in at the next sync, or copy them now.</div></div></div>';
   r.diffs.forEach((d) => {
     const isCash = d.ticker === 'CASH';
     h += '<button class="row" data-act="fixdiff" data-acct="' + esc(account) + '" data-ticker="' + esc(d.ticker) + '"><div class="main"><div class="lbl">' + (isCash ? 'Cash' : esc(d.ticker)) + '</div><div class="sub wrap">Sheet ' + (isCash ? money2(d.sheet) : fmtSh(d.sheet) + ' sh') + ', ' + inst + ' ' + (isCash ? money2(d.real) : fmtSh(d.real) + ' sh') + '</div></div>' + I.chev + '</button>';
   });
-  h += '<button class="row" data-act="plaidapply" data-id="' + esc(r.p.id) + '"><div class="main"><div class="lbl" style="color:var(--pine)">' + (S.confirmApply === r.p.id ? 'Tap again to copy into your sheet' : 'Use ' + inst + '\'s numbers for all') + '</div></div></button>';
+  h += '<button class="row" data-act="plaidapply" data-id="' + esc(r.p.id) + '"><div class="main"><div class="lbl" style="color:var(--pine)">' + 'Copy now' + '</div></div></button>';
   return h;
 }
 function bankCheck(a) {
@@ -1280,7 +1282,7 @@ function connectionsHTML() {
   let h = '<div class="navbar"><button data-act="back">' + I.back + ' Back</button><span></span><span style="width:60px"></span></div>';
   h += '<h1 class="title" style="margin-top:4px">Connected accounts</h1>';
   if (!P.configured) {
-    h += '<p style="color:var(--ink-2);margin:0 4px 16px;line-height:1.45">Connect Empower and Robinhood so the app can check your sheet against the real accounts. Your sheet always comes first; differences are flagged, never copied in on their own. This uses Plaid, the same service behind most bank connections, on its free Trial plan.</p>';
+    h += '<p style="color:var(--ink-2);margin:0 4px 16px;line-height:1.45">Connect Empower and Robinhood so your investments update on their own. Banks can connect too, but only to check your Log; bank totals always come from your sheet. This uses Plaid, the same service behind most bank connections, on its free Trial plan.</p>';
     h += '<div class="group">' + [
       ['Make a Plaid account', 'Sign up at dashboard.plaid.com and request the free Trial plan. Plaid checks your ID; most people are approved right away.'],
       ['Copy your keys', 'In Plaid, open Developers, then Keys. Copy the client_id and the Production secret.'],
@@ -1291,8 +1293,8 @@ function connectionsHTML() {
   }
   h += '<div class="group">' +
     '<button class="row" data-act="plaidconnect" data-kind="invest"><div class="main"><div class="lbl" style="color:var(--pine)">Connect Robinhood or Empower</div><div class="sub">Brokerage, IRA and 401k accounts</div></div>' + I.chev + '</button>' +
-    '<button class="row" data-act="plaidconnect" data-kind="bank"><div class="main"><div class="lbl" style="color:var(--pine)">Connect a bank or card</div><div class="sub">Balances checked against your Log</div></div>' + I.chev + '</button></div>';
-  h += '<div class="foot">Your sheet comes first. These connections only check it: differences show up on Accounts and Investing, and nothing is written into the sheet unless you tap to copy it. Tap an account below to change what it checks.</div>';
+    '<button class="row" data-act="plaidconnect" data-kind="bank"><div class="main"><div class="lbl" style="color:var(--pine)">Connect a bank or card</div><div class="sub">Only checks your Log, never changes totals</div></div>' + I.chev + '</button></div>';
+  h += '<div class="foot">Investment accounts update your Investments and 401k tabs every 4 hours. Bank and card accounts only check your Log and never change your totals. Tap an account below to change which line it is.</div>';
   (P.items || []).forEach((it) => {
     const accts = (P.accounts || []).filter((a) => a.item === it.id);
     h += '<section class="section"><div class="section-h"><h2>' + esc(it.institution) + '</h2><span class="aside">' + (it.synced ? 'Synced ' + ago(Date.parse(it.synced)) : '') + '</span></div><div class="group">';
@@ -1319,7 +1321,7 @@ function plaidPickHTML() {
       (cur === o[0] ? '<span class="pos" style="font-weight:600">' + (s.busy ? 'Saving' : 'Selected') + '</span>' : '') + '</button>';
   };
   let h = '<div class="navbar"><button data-act="close">Cancel</button><span class="t">' + esc(a.name || 'Account') + '</span><span style="width:60px"></span></div>';
-  h += '<p style="color:var(--ink-2);margin:14px 4px;line-height:1.45">' + esc(a.institution || '') + (a.mask ? ' account ending ' + esc(a.mask) : '') + (typeof a.balance === 'number' ? ', ' + money2(a.balance) : '') + '. Which line in your sheet should it be checked against? Nothing in the sheet changes.</p>';
+  h += '<p style="color:var(--ink-2);margin:14px 4px;line-height:1.45">' + esc(a.institution || '') + (a.mask ? ' account ending ' + esc(a.mask) : '') + (typeof a.balance === 'number' ? ', ' + money2(a.balance) : '') + '. Which line in your sheet is it? Investment lines update from this account automatically. Bank and card lines are only checked; your Log stays the total.</p>';
   groups.forEach(([title, list]) => { h += '<div class="flabel">' + title + '</div><div class="group">' + list.map(opt).join('') + '</div>'; });
   h += '<div class="group" style="margin-top:16px">' + opt(['', 'Not used']) + '</div>';
   if (s.err) h += '<div class="err">' + esc(s.err) + '</div>';
@@ -1532,8 +1534,7 @@ document.addEventListener('click', (ev) => {
       break;
     }
     case 'plaidapply': {
-      if (S.confirmApply !== d.id) { S.confirmApply = d.id; render(); renderPages(); break; }
-      S.confirmApply = null; toast('Copying into your sheet');
+      toast('Copying into your sheet');
       api('plaidApply', { accountId: d.id }).then((r) => { ingest(r.data); toast('Updated ' + ((r.result && r.result.applied) || []).join(', ')); }).catch((e) => toast(e.message));
       break;
     }
