@@ -12,6 +12,7 @@
 <meta name="format-detection" content="telephone=no">
 <meta name="robots" content="noindex">
 <link rel="apple-touch-icon" href="icon-180.png">
+<link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon-180.png">
 <title>Moneys</title>
 <style>
@@ -530,7 +531,7 @@ function parse(raw) {
     feed: (raw.bankFeed || []).slice(1).filter((r) => r && /^\d{4}-\d{2}-\d{2}/.test(r[0] || '') && r[5]).map((r) => ({
       date: String(r[0]).slice(0, 10), desc: String(r[1] || ''), amount: num(r[2]), account: String(r[3] || ''), pending: r[4] === 'Yes', id: String(r[5]), status: String(r[6] || '')
     })),
-    notify: raw.notify || { connected: false, token: false, bot: '' }
+    push: raw.push || { publicKey: '', devices: [] }
   };
 }
 
@@ -568,6 +569,7 @@ function ingest(raw, when) {
   S.offline = false; S.error = '';
   if (!when) LS.set('cache', { at: S.updatedAt, raw });
   render();
+  if (!when) checkPushQuietly();
 }
 async function refresh(manual) {
   if (S.loading || !LS.get('pair', null)) return;
@@ -1170,12 +1172,12 @@ function settingsHTML() {
   h += '<div class="group" style="margin-top:22px">' +
     (M && M.sheetUrl ? '<a class="row" href="' + esc(M.sheetUrl) + '" target="_blank" rel="noopener"><div class="main"><div class="lbl">Open the Google Sheet</div></div>' + I.chev + '</a>' : '') +
     '<button class="row" data-act="connections"><div class="main"><div class="lbl">Connected accounts</div><div class="sub">' + (M && M.plaid && M.plaid.items.length ? M.plaid.items.map((x) => x.institution).join(', ') : 'Empower, Robinhood and banks via Plaid') + '</div></div>' + I.chev + '</button>' +
-    '<button class="row" data-act="notifypage"><div class="main"><div class="lbl">Notifications</div><div class="sub">' + (M && M.notify.connected ? 'On, through Telegram' : 'Free, through Telegram') + '</div></div>' + I.chev + '</button>' +
+    '<button class="row" data-act="notifypage"><div class="main"><div class="lbl">Notifications</div><div class="sub">' + (M && pushOnHere() ? 'On for this iPhone' : 'Off') + '</div></div>' + I.chev + '</button>' +
     '<button class="row" data-act="widgetpage"><div class="main"><div class="lbl">Home screen widget</div><div class="sub">Net worth at a glance</div></div>' + I.chev + '</button>' +
     '<button class="row" data-act="refresh"><div class="main"><div class="lbl">Refresh now</div><div class="sub">Pulls fresh on open and every minute</div></div></button>' +
     '<button class="row" data-act="snapshot"><div class="main"><div class="lbl">Save net worth snapshot</div></div></button></div>';
   h += '<div class="group" style="margin-top:22px"><button class="row" data-act="unpair"><div class="main"><div class="lbl neg">' + (S.sheet.confirmUnpair ? 'Tap again to disconnect' : 'Disconnect this phone') + '</div><div class="sub">You will need the pairing link again</div></div></button></div>';
-  h += '<div class="foot" style="text-align:center;margin-top:18px">Moneys for iPhone, v9</div>';
+  h += '<div class="foot" style="text-align:center;margin-top:18px">Moneys for iPhone, v10</div>';
   return h;
 }
 function holdingHTML() {
@@ -1414,25 +1416,75 @@ function ignoreFeed(id) {
 }
 
 /* ================= notifications + widget ================= */
+/* Push notifications straight to this app (iPhone home screen apps, iOS 16.4+). No other app needed. */
+const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+function b64uToBytes(s) {
+  const b = atob(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4));
+  return Uint8Array.from(b, (c) => c.charCodeAt(0));
+}
+function bytesToB64u(buf) { return btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); }
+async function swReg() {
+  let reg = await navigator.serviceWorker.getRegistration();
+  if (!reg) reg = await navigator.serviceWorker.register('sw.js');
+  return navigator.serviceWorker.ready.then(() => reg);
+}
+// The service worker reads the connection from here when a push wakes it
+function savePairForSW() {
+  if (!('caches' in window)) return Promise.resolve();
+  const p = LS.get('pair', null);
+  return caches.open('moneys-pair').then((c) => (p ? c.put('pair', new Response(JSON.stringify(p))) : c.delete('pair'))).catch(() => {});
+}
+async function loadPushState() {
+  if (!pushSupported()) { S.push = { supported: false }; return S.push; }
+  let endpoint = '', key = '';
+  try {
+    const reg = await navigator.serviceWorker.getRegistration();
+    const sub = reg && await reg.pushManager.getSubscription();
+    if (sub) { endpoint = sub.endpoint; key = sub.options && sub.options.applicationServerKey ? bytesToB64u(sub.options.applicationServerKey) : ''; }
+  } catch (e) {}
+  S.push = Object.assign(S.push || {}, { supported: true, permission: Notification.permission, endpoint, key });
+  return S.push;
+}
+const pushOnHere = () => !!(S.push && S.push.endpoint && S.model && (S.model.push.devices || []).includes(S.push.endpoint.slice(-24)));
+async function subscribePush() {
+  const pub = S.model.push.publicKey;
+  const reg = await swReg();
+  let sub = await reg.pushManager.getSubscription();
+  if (sub && sub.options && sub.options.applicationServerKey && bytesToB64u(sub.options.applicationServerKey) !== pub) { await sub.unsubscribe(); sub = null; }
+  if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uToBytes(pub) });
+  await savePairForSW();
+  const j = await api('pushSubscribe', { endpoint: sub.endpoint, device: 'iPhone' });
+  if (j.push) S.model.push = j.push;
+  await loadPushState();
+}
+// On open: if notifications were turned on here, make sure the sheet still has this phone's address
+let pushChecked = false;
+function checkPushQuietly() {
+  if (pushChecked || LS.get('pushOff', false) || !S.model || !S.model.push.publicKey || !pushSupported() || Notification.permission !== 'granted') return;
+  pushChecked = true;
+  savePairForSW();
+  loadPushState().then(() => { if (!pushOnHere()) return subscribePush(); }).catch(() => {});
+}
 function notifyHTML() {
-  const N = S.model.notify;
+  const M = S.model; const P = S.push || { supported: pushSupported(), permission: pushSupported() ? Notification.permission : '' };
   let h = '<div class="navbar"><button data-act="back">' + I.back + ' Back</button><span></span><span style="width:60px"></span></div>';
   h += '<h1 class="title" style="margin-top:4px">Notifications</h1>';
-  if (N.connected) {
-    h += '<div class="group"><div class="row"><div class="main"><div class="lbl pos">On</div><div class="sub">Coming from your Telegram bot' + (N.bot ? ' @' + esc(N.bot) : '') + '</div></div></div>' +
-      '<button class="row" data-act="testnotify"><div class="main"><div class="lbl" style="color:var(--pine)">Send a test</div><div class="sub">Should show up in a few seconds</div></div></button></div>';
+  const note = (title, text) => '<div class="group"><div class="row"><div class="main"><div class="lbl">' + title + '</div><div class="sub wrap">' + text + '</div></div></div></div>';
+  if (!M.push.publicKey) {
+    h += note('One step in your script first', 'In Apps Script, run setup() once, then Deploy, Manage deployments, pencil, New version, Deploy. Then tap Check again.');
+    h += '<section class="section"><button class="btn ghost" data-act="refresh">Check again</button></section>';
+  } else if (!P.supported) {
+    h += STANDALONE ? note('This iPhone can\'t get them yet', 'Notifications for home screen apps need iOS 16.4 or newer. Update in Settings, General, Software Update.')
+      : note('Open Moneys from your home screen', 'iPhone only sends notifications to apps opened from their home screen icon, not from a Safari tab.');
+  } else if (P.permission === 'denied') {
+    h += note('Notifications are blocked', 'Open iPhone Settings, Notifications, Moneys, and turn on Allow Notifications. Then come back here.');
+  } else if (pushOnHere()) {
+    h += '<div class="group"><div class="row"><div class="main"><div class="lbl pos">On for this iPhone</div><div class="sub">They come from Moneys itself</div></div></div>' +
+      '<button class="row" data-act="testnotify"><div class="main"><div class="lbl" style="color:var(--pine)">Send a test</div><div class="sub">Should pop up in a few seconds</div></div></button>' +
+      '<button class="row" data-act="pushoff"><div class="main"><div class="lbl neg">Turn off</div></div></button></div>';
   } else {
-    h += '<p style="color:var(--ink-2);margin:0 4px 16px;line-height:1.45">Alerts come through a private Telegram bot that only talks to you. It is free and takes about 3 minutes, one time.</p>';
-    h += '<div class="group">' + [
-      ['Get Telegram', 'Free on the App Store. Sign up with your phone number.', 'https://apps.apple.com/app/id686449807'],
-      ['Make your bot', 'Open @BotFather, tap Start, send /newbot. Name it Moneys, then pick a username ending in "bot".', 'https://t.me/BotFather'],
-      ['Copy the token', 'BotFather replies with a long token like 123456:ABC-xyz. Copy it.'],
-      ['Tap Start in your bot', 'Tap the t.me link BotFather sent, then Start. That lets it message you.'],
-      ['Paste and run setup', 'In Apps Script, paste the token into TELEGRAM_TOKEN at the top, save, run setup(). You get a hello message.'],
-    ].map((x, i) => x[2]
-      ? '<a class="row" href="' + x[2] + '" target="_blank" rel="noopener"><div class="main"><div class="lbl">' + (i + 1) + '. ' + x[0] + '</div><div class="sub wrap">' + x[1] + '</div></div>' + I.chev + '</a>'
-      : '<div class="row"><div class="main"><div class="lbl">' + (i + 1) + '. ' + x[0] + '</div><div class="sub wrap">' + x[1] + '</div></div></div>').join('') + '</div>';
-    h += '<section class="section"><button class="btn ghost" data-act="refresh">Check again</button>' + (N.token ? '<div class="foot" style="text-align:center">Token saved. Tap Start in your bot, then run setup() again.</div>' : '') + '</section>';
+    h += '<p style="color:var(--ink-2);margin:0 4px 16px;line-height:1.45">Alerts come straight from Moneys, like any other app. Nothing else to install. Tap below, then Allow.</p>';
+    h += '<button class="btn" data-act="pushon" ' + (P.busy ? 'disabled' : '') + '>' + (P.busy ? 'Turning on' : 'Turn on notifications') + '</button>';
   }
   h += '<section class="section"><div class="section-h"><h2>You will hear about</h2></div><div class="group">' + [
     ['A paycheck landing', 'Take-home and 401k, logged for you'],
@@ -1441,7 +1493,7 @@ function notifyHTML() {
     ['Things that need you', 'A pay stub to check or a login that expired'],
     ['Sunday recap', '6pm: the week, the month and net worth'],
   ].map((x) => '<div class="row"><div class="main"><div class="lbl">' + x[0] + '</div><div class="sub">' + x[1] + '</div></div></div>').join('') + '</div></section>';
-  h += '<div class="foot">The bot token works like a password and stays in your script. Messages carry totals, never account numbers.</div>';
+  h += '<div class="foot">Tapping a notification opens Moneys. They carry totals, never account numbers.</div>';
   return h;
 }
 function widgetHTML() {
@@ -1711,7 +1763,7 @@ document.addEventListener('click', (ev) => {
       break;
     case 'unpair':
       if (!S.sheet.confirmUnpair) { S.sheet.confirmUnpair = true; showSheet(); break; }
-      ['pair', 'cache', 'lockId', 'justPaired'].forEach(LS.del); S.model = null; closeSheet(); render(); break;
+      ['pair', 'cache', 'lockId', 'justPaired'].forEach(LS.del); savePairForSW(); S.model = null; closeSheet(); render(); break;
     case 'unlock': unlock(); break;
     case 'connections': S.sheet = null; showSheet(); S.confirmRemove = null; pushPage('connections'); break;
     case 'inbox': pushPage('inbox'); break;
@@ -1723,14 +1775,34 @@ document.addEventListener('click', (ev) => {
       break;
     }
     case 'feedignore': ignoreFeed(d.id); break;
-    case 'notifypage': S.sheet = null; showSheet(); pushPage('notify'); break;
+    case 'notifypage': S.sheet = null; showSheet(); pushPage('notify'); loadPushState().then(renderPages); break;
+    case 'pushon': {
+      if (!pushSupported() || (S.push && S.push.busy)) break;
+      S.push = S.push || { supported: true }; S.push.busy = true; renderPages();
+      // iPhone only shows the Allow prompt if this is asked right inside the tap
+      Notification.requestPermission().then((perm) => {
+        if (perm !== 'granted') throw new Error(perm === 'denied' ? 'Blocked. Turn on Moneys in iPhone Settings, Notifications.' : 'Tap Allow to turn them on.');
+        return subscribePush();
+      }).then(() => { LS.del('pushOff'); toast('Notifications are on'); })
+        .catch((e) => toast(/Unknown action/.test(e.message) ? 'Your script is an old version. Deploy a New version, then try again.' : e.message))
+        .finally(() => { S.push.busy = false; loadPushState().then(renderPages); });
+      break;
+    }
+    case 'pushoff': {
+      const ep = S.push && S.push.endpoint;
+      swReg().then((reg) => reg.pushManager.getSubscription()).then((sub) => sub && sub.unsubscribe())
+        .then(() => (ep ? api('pushUnsubscribe', { endpoint: ep }) : null))
+        .then((j) => { if (j && j.push) S.model.push = j.push; LS.set('pushOff', true); toast('Notifications are off'); })
+        .catch((e) => toast(e.message)).finally(() => loadPushState().then(renderPages));
+      break;
+    }
     case 'widgetpage': S.sheet = null; showSheet(); S.widgetFallback = ''; loadWidgetSrc().catch(() => {}); pushPage('widget'); break;
     case 'testnotify':
       toast('Sending');
       api('testNotify').then((j) => {
         const r = j.result;
         if (!r) toast('Your script is an old version. Deploy a New version, then try again.');
-        else toast(r.code === 200 ? 'Sent. Check Telegram.' : (r.body || 'Could not send'));
+        else toast(r.sent ? 'Sent. It should pop up in a few seconds.' : (r.body || 'Could not send'));
       }).catch((e) => toast(/Unknown action/.test(e.message) ? 'Your script is an old version. Deploy a New version, then try again.' : e.message));
       break;
     case 'copywidget': {
@@ -1803,7 +1875,7 @@ document.addEventListener('click', (ev) => {
     case 'pair': {
       const p = decodePair(document.getElementById('paircode').value);
       if (!p) { toast('That link does not look right. Copy the whole line from the log.'); break; }
-      LS.set('pair', p); S.error = ''; render(); refresh(); break;
+      LS.set('pair', p); savePairForSW(); S.error = ''; render(); refresh(); break;
     }
   }
 });
@@ -1881,6 +1953,8 @@ setInterval(paintStatus, 20000);
   if (LS.get('lockId', null)) { lockShow(); unlock(); }
   refresh();
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+  savePairForSW();
+  if (pushSupported()) loadPushState().catch(() => {});
 })();
 </script>
 </body>
