@@ -1176,7 +1176,7 @@ function settingsHTML() {
     '<button class="row" data-act="refresh"><div class="main"><div class="lbl">Refresh now</div><div class="sub">Pulls fresh on open and every minute</div></div></button>' +
     '<button class="row" data-act="snapshot"><div class="main"><div class="lbl">Save net worth snapshot</div></div></button></div>';
   h += '<div class="group" style="margin-top:22px"><button class="row" data-act="unpair"><div class="main"><div class="lbl neg">' + (S.sheet.confirmUnpair ? 'Tap again to disconnect' : 'Disconnect this phone') + '</div><div class="sub">You will need the pairing link again</div></div></button></div>';
-  h += '<div class="foot" style="text-align:center;margin-top:18px">Moneys for iPhone, v7</div>';
+  h += '<div class="foot" style="text-align:center;margin-top:18px">Moneys for iPhone, v8</div>';
   return h;
 }
 function holdingHTML() {
@@ -1722,7 +1722,14 @@ document.addEventListener('click', (ev) => {
     case 'notifypage': S.sheet = null; showSheet(); pushPage('notify'); break;
     case 'widgetpage': S.sheet = null; showSheet(); S.widgetFallback = ''; loadWidgetSrc().catch(() => {}); pushPage('widget'); break;
     case 'copytopic': copyText(S.model.ntfyTopic).then(() => toast('Topic copied')).catch(() => toast(S.model.ntfyTopic)); break;
-    case 'testnotify': toast('Sending'); api('testNotify').then(() => toast('Sent. Check ntfy.')).catch((e) => toast(e.message)); break;
+    case 'testnotify':
+      toast('Sending');
+      api('testNotify').then((j) => {
+        const r = j.result;
+        if (!r) toast('Your script is an old version. Deploy a New version, then try again.');
+        else toast(r.code === 200 ? 'Sent. Check ntfy.' : 'ntfy said ' + r.code + (r.body ? ': ' + r.body : ''));
+      }).catch((e) => toast(/Unknown action/.test(e.message) ? 'Your script is an old version. Deploy a New version, then try again.' : e.message));
+      break;
     case 'copywidget': {
       const src = widgetSource();
       const fail = () => loadWidgetSrc().then(() => { S.widgetFallback = widgetSource(); renderPages(); toast('Copy it from the box below'); }).catch((e) => toast(e.message));

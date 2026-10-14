@@ -1,6 +1,6 @@
 // Keeps the app shell on the phone so Moneys opens instantly, even offline.
 // Your money data never passes through here: it comes straight from your sheet.
-const CACHE = 'moneys-v7';
+const CACHE = 'moneys-v8';
 const SHELL = ['./', './index.html', './icon-180.png'];
 
 self.addEventListener('install', (e) => {
