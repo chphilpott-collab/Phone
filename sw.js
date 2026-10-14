@@ -1,6 +1,6 @@
 // Keeps the app shell on the phone so Moneys opens instantly, even offline.
 // Your money data never passes through here: it comes straight from your sheet.
-const CACHE = 'moneys-v12';
+const CACHE = 'moneys-v13';
 const SHELL = ['./', './index.html', './icon-180.png', './manifest.json'];
 const PAIR = 'moneys-pair'; // the app's connection details, so a push can ask the sheet what's new
 

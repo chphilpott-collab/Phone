@@ -569,7 +569,15 @@ function ingest(raw, when) {
   S.offline = false; S.error = '';
   if (!when) LS.set('cache', { at: S.updatedAt, raw });
   render();
-  if (!when) checkPushQuietly();
+  if (!when) { checkPushQuietly(); syncCardsQuietly(); }
+}
+let cardSyncAt = 0;
+function syncCardsQuietly() {
+  const P = S.model && S.model.plaid;
+  if (!P || !(P.accounts || []).some((a) => a.target && isCardName(String(a.target).split('|')[0]))) return;
+  if (Date.now() - cardSyncAt < 15 * 60 * 1000 || Date.now() - (Date.parse(P.synced) || 0) < 15 * 60 * 1000) return;
+  cardSyncAt = Date.now();
+  api('plaidSync').then((r) => { if (r.result && r.result.cards && (r.result.cards.logged || r.result.cards.updated || r.result.cards.removed)) ingest(r.data); }).catch(() => {});
 }
 async function refresh(manual) {
   if (S.loading || !LS.get('pair', null)) return;
@@ -630,7 +638,7 @@ function txRow(t, acct) {
     ? '<span>' + esc(short(t.account)) + ' to ' + esc(short(t.to)) + '</span>'
     : '<span>' + esc(t.cat) + '</span><span class="acct">' + esc(short(t.account)) + '</span>';
   return '<button class="row" data-act="edit" data-row="' + t.row + '"><div class="main"><div class="lbl">' + esc(t.what) + '</div><div class="sub">' + sub +
-    (d.tag ? '<span class="tag">' + d.tag + '</span>' : '') + '</div></div><div class="val ' + d.cls + '">' + esc(d.txt) + '</div></button>';
+    (d.tag ? '<span class="tag">' + d.tag + '</span>' : '') + (/^Auto \(pending\)/.test(t.note) ? '<span class="tag">Pending</span>' : '') + '</div></div><div class="val ' + d.cls + '">' + esc(d.txt) + '</div></button>';
 }
 function txList(list, acct, limit) {
   if (!list.length) return '<div class="group"><div class="empty">No transactions here yet.</div></div>';
@@ -772,7 +780,8 @@ function accountsHTML() {
       list.map((a) => {
         const c = bankCheck(a);
         const miss = (missingFromLog().byAcct[a.name] || []).length;
-        const sub = miss ? '<span style="color:var(--amber)">' + miss + ' not in your Log</span>' : !c ? esc(a.where) : Math.abs(c.diff) <= 1 ? esc(a.where) + '<span class="acct">Matches bank</span>' : '<span style="color:var(--amber)">Bank says ' + money2(c.bank) + '</span>';
+        const ca = cardAuto(a.name);
+        const sub = ca && ca.error ? '<span style="color:var(--amber)">Can\'t read charges</span>' : miss ? '<span style="color:var(--amber)">' + miss + ' not in your Log</span>' : ca ? esc(a.where) + '<span class="acct">Logs itself</span>' : !c ? esc(a.where) : Math.abs(c.diff) <= 1 ? esc(a.where) + '<span class="acct">Matches bank</span>' : '<span style="color:var(--amber)">Bank says ' + money2(c.bank) + '</span>';
         return '<button class="row" data-act="acctpage" data-acct="' + esc(a.name) + '"><div class="main"><div class="lbl">' + esc(a.name) + '</div><div class="sub">' + sub + '</div></div><div class="val">' + money2(a.balance) + '</div>' + I.chev + '</button>';
       }).join('') + '</div></section>';
   });
@@ -799,6 +808,9 @@ function accountPageHTML(name) {
   h += '<section class="hero" style="padding-top:4px"><div class="label">' + esc(a.name) + '</div><div class="big">' + money2(a.balance) + '</div><div class="delta muted" style="font-family:var(--text)">' + esc(a.where) + '</div></section>';
   const bc = bankCheck(a);
   if (bc && Math.abs(bc.diff) > 1) h += '<section class="section" style="margin-top:18px"><div class="group"><div class="row"><div class="main"><div class="lbl">' + esc(bc.institution) + ' says ' + money2(bc.bank) + '</div><div class="sub wrap">Your Log is ' + money2(Math.abs(bc.diff)) + (bc.diff > 0 ? ' higher' : ' lower') + '. Usually a missing or pending transaction.</div></div></div></div></section>';
+  const ca = cardAuto(name);
+  if (ca) h += '<section class="section" style="margin-top:18px"><div class="group"><div class="row"><div class="main"><div class="lbl">' + (ca.error ? '<span style="color:var(--amber)">' + esc(ca.institution) + ' isn\'t sharing charges</span>' : 'Charges log themselves') + '</div><div class="sub wrap">' +
+    (ca.error ? 'Settings, Connected accounts has the fix.' : 'From ' + esc(ca.institution) + (ca.since ? ', everything since ' + esc(shortDate(ca.since)) : '') + '. Pending charges show up right away and update when they post.') + '</div></div></div></div></section>';
   const miss = inboxList(name);
   if (miss.length) h += '<section class="section" style="margin-top:18px"><div class="section-h"><h2>Not in your Log</h2><span class="aside">' + miss.length + '</span></div><div class="group">' + miss.map(feedRowHTML).join('') + '</div></section>';
   h += '<section class="section" style="margin-top:18px"><div class="group"><div class="row"><div class="main"><div class="lbl">In this month</div></div><div class="val pos">+' + money2(inn) + '</div></div>' +
@@ -1152,6 +1164,10 @@ function sheetTxHTML() {
   const yISO = y.getFullYear() + '-' + pad(y.getMonth() + 1) + '-' + pad(y.getDate());
   h += '<div class="flabel">Date</div><div class="wrapchips"><button class="chip' + (s.date === todayISO() ? ' on' : '') + '" data-act="pick" data-f="date" data-v="' + todayISO() + '">Today</button><button class="chip' + (s.date === yISO ? ' on' : '') + '" data-act="pick" data-f="date" data-v="' + yISO + '">Yesterday</button></div>';
   h += '<div class="field"><label for="f-date">Other date</label><input id="f-date" type="date" value="' + esc(s.date) + '"></div>';
+  if (s.type === 'spend' && M.owed.who) {
+    const theirs = s.cat === 'Reimbursable' && s.what.startsWith(M.owed.who + ': ');
+    h += '<button class="switch' + (theirs ? ' on' : '') + '" data-act="theirs"><span>' + esc(M.owed.who) + '\'s charge<small>Counts toward what ' + esc(M.owed.who) + ' owes, not your spending</small></span><span class="k"></span></button>';
+  }
   if (!isXfer) {
     h += '<button class="switch' + (s.refund ? ' on' : '') + '" data-act="refund"><span>' + (s.type === 'income' ? 'Money going back out' : 'Refund or payback') + '<small>' + (s.type === 'income' ? 'Flips this to a negative' : 'Money coming back to you') + '</small></span><span class="k"></span></button>';
   }
@@ -1177,7 +1193,7 @@ function settingsHTML() {
     '<button class="row" data-act="refresh"><div class="main"><div class="lbl">Refresh now</div><div class="sub">Pulls fresh on open and every minute</div></div></button>' +
     '<button class="row" data-act="snapshot"><div class="main"><div class="lbl">Save net worth snapshot</div></div></button></div>';
   h += '<div class="group" style="margin-top:22px"><button class="row" data-act="unpair"><div class="main"><div class="lbl neg">' + (S.sheet.confirmUnpair ? 'Tap again to disconnect' : 'Disconnect this phone') + '</div><div class="sub">You will need the pairing link again</div></div></button></div>';
-  h += '<div class="foot" style="text-align:center;margin-top:18px">Moneys for iPhone, v12</div>';
+  h += '<div class="foot" style="text-align:center;margin-top:18px">Moneys for iPhone, v13</div>';
   return h;
 }
 function holdingHTML() {
@@ -1263,7 +1279,23 @@ async function deleteTx() {
 }
 
 /* ================= connected accounts (Plaid) ================= */
-const TARGET_LABEL = (t) => !t ? 'Not used' : t === '401k' ? 'Updates your 401k balance' : (t === 'Brokerage' || t === 'Roth IRA') ? 'Updates ' + t + ' shares and cash' : 'Checks ' + t + ' (your Log stays the total)';
+const isCardName = (n) => !!(S.model && S.model.accounts.some((a) => a.name === n && a.type === 'Credit card'));
+const TARGET_LABEL = (t) => {
+  if (!t) return 'Not used';
+  if (t === '401k') return 'Updates your 401k balance';
+  if (t === 'Brokerage' || t === 'Roth IRA') return 'Updates ' + t + ' shares and cash';
+  const [line, who] = t.split('|');
+  if (who) return who + '\'s card: logs charges to ' + line + ' as reimbursable';
+  return isCardName(line) ? 'Logs charges to ' + line + ' for you' : 'Checks ' + line + ' (your Log stays the total)';
+};
+// Card lines that log themselves, and whether Plaid is actually sharing their transactions
+function cardAuto(name) {
+  const P = S.model.plaid || {};
+  const accts = (P.accounts || []).filter((a) => a.target === name || String(a.target || '').split('|')[0] === name);
+  if (!accts.length || !isCardName(name)) return null;
+  const item = (P.items || []).find((i) => i.id === accts[0].item) || {};
+  return { institution: accts[0].institution, error: item.error || item.feedError || '', since: (P.cardsAfter || {})[name] || '' };
+}
 const plaidFor = (target) => ((S.model.plaid || {}).accounts || []).find((a) => a.target === target) || null;
 const fmtSh = (n) => String(Math.round(n * 1e6) / 1e6);
 // Where the sheet and the real account disagree, line by line (normally only between syncs).
@@ -1556,6 +1588,7 @@ function connectionsHTML() {
     const accts = (P.accounts || []).filter((a) => a.item === it.id);
     h += '<section class="section"><div class="section-h"><h2>' + esc(it.institution) + '</h2><span class="aside">' + (it.synced ? 'Synced ' + ago(Date.parse(it.synced)) : '') + '</span></div><div class="group">';
     if (it.error) h += '<button class="row" data-act="plaidconnect" data-item="' + esc(it.id) + '"><div class="main"><div class="lbl neg">Log in again</div><div class="sub wrap">' + esc(it.institution) + ' stopped sharing data. Tap to reconnect; nothing is lost.</div></div>' + I.chev + '</button>';
+    else if (it.feedError && accts.some((a) => a.target && isCardName(String(a.target).split('|')[0]))) h += '<button class="row" data-act="plaidconnect" data-kind="bank"><div class="main"><div class="lbl" style="color:var(--amber)">Not sharing card charges</div><div class="sub wrap">This connection was made for investments only. Tap to connect ' + esc(it.institution) + ' again as a bank or card, then point the card at its line here.</div></div>' + I.chev + '</button>';
     accts.forEach((a) => {
       h += '<button class="row" data-act="plaidpick" data-id="' + esc(a.id) + '"><div class="main"><div class="lbl">' + esc(a.name) + (a.mask ? ' <span class="muted" style="font-size:14px">••' + esc(a.mask) + '</span>' : '') + '</div><div class="sub wrap">' + esc(TARGET_LABEL(a.target)) + '</div></div><div class="val">' + (typeof a.balance === 'number' ? money2(a.balance) : '') + '</div>' + I.chev + '</button>';
     });
@@ -1569,7 +1602,11 @@ function plaidPickHTML() {
   const s = S.sheet; const M = S.model;
   const a = (M.plaid.accounts || []).find((x) => x.id === s.id) || {};
   const invOpts = [['401k', (M.accounts.find((x) => x.type === '401k') || { name: '401k' }).name], ['Brokerage', 'Brokerage'], ['Roth IRA', 'Roth IRA']];
-  const bankOpts = M.accounts.filter((x) => /^(Cash|Credit card)$/.test(x.type)).map((x) => [x.name, x.name]);
+  const bankOpts = [];
+  M.accounts.filter((x) => /^(Cash|Credit card)$/.test(x.type)).forEach((x) => {
+    bankOpts.push([x.name, x.name]);
+    if (x.type === 'Credit card' && M.owed.who) bankOpts.push([x.name + '|' + M.owed.who, M.owed.who + '\'s card on ' + short(x.name)]);
+  });
   const groups = a.type === 'investment' ? [['Investments', invOpts], ['Bank and card accounts', bankOpts]] : [['Bank and card accounts', bankOpts], ['Investments', invOpts]];
   const cur = s.pending != null ? s.pending : (a.target || '');
   const opt = (o) => {
@@ -1760,6 +1797,16 @@ document.addEventListener('click', (ev) => {
       showSheet(); break;
     }
     case 'refund': S.sheet.refund = !S.sheet.refund; showSheet(); break;
+    case 'theirs': {
+      const s = S.sheet; const who = S.model.owed.who; const pre = who + ': ';
+      const bare = s.what.replace(/^[^:]{1,20}:\s*/, '');
+      if (s.cat === 'Reimbursable' && s.what.startsWith(pre)) {
+        s.what = bare; s.cat = '';
+        const prev = S.model.log.find((t) => t.what.toLowerCase() === bare.toLowerCase() && t.category && t.category !== 'Reimbursable');
+        if (prev) s.cat = prev.category;
+      } else { s.what = pre + bare; s.cat = 'Reimbursable'; }
+      s.touched.cat = 1; showSheet(); break;
+    }
     case 'save': saveTx(); break;
     case 'del': deleteTx(); break;
     case 'snapshot':
