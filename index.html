@@ -445,7 +445,7 @@ function parse(raw) {
     const row = inv[r] || [];
     if (!row[0]) break;
     const opt = (v) => (typeof v === 'number' ? v : null);
-    holdings.push({ account: row[0], name: row[1] || '', ticker: row[2] || '', shares: num(row[3]), price: num(row[6] != null ? row[6] : row[4]), value: num(row[7]), role: row[8] || '', pct: num(row[9]),
+    holdings.push({ row: r + 1, account: row[0], name: row[1] || '', ticker: row[2] || '', shares: num(row[3]), price: num(row[6] != null ? row[6] : row[4]), value: num(row[7]), role: row[8] || '', pct: num(row[9]),
       dayPct: opt(row[10]), dayAmt: opt(row[11]), ytd: opt(row[12]) });
   }
 
@@ -908,17 +908,18 @@ function investingHTML() {
     (H.some((x) => x.dayAmt != null) ? '<div class="delta ' + (day >= 0 ? 'pos' : 'neg') + '">' + signed(day, true) + ' <span class="muted" style="font-family:var(--text)">today, ' + (day >= 0 ? '+' : MINUS) + pct(Math.abs(day / (dayBase || 1)), 2) + '</span></div>' : '') + '</section>';
   const accts = [...new Set(H.map((x) => x.account))];
   accts.forEach((a) => {
-    const list = H.filter((x) => x.account === a).sort((p, q) => q.value - p.value);
+    const list = H.filter((x) => x.account === a && (x.shares > 0 || x.ticker === 'CASH')).sort((p, q) => q.value - p.value);
     const sum = list.reduce((s, x) => s + x.value, 0);
     const dsum = list.reduce((s, x) => s + (x.dayAmt || 0), 0);
     h += '<section class="section"><div class="section-h"><h2>' + esc(a) + '</h2><span class="aside num">' + money(sum) + '</span></div><div class="group">';
     list.forEach((x) => {
       const isCash = x.ticker === 'CASH';
       const dayTxt = x.dayPct == null ? '' : '<small class="' + (x.dayPct >= 0 ? 'pos' : 'neg') + '">' + (x.dayPct >= 0 ? '+' : MINUS) + pct(Math.abs(x.dayPct), 2) + ' today</small>';
-      h += '<div class="row"><div class="main"><div class="lbl"><strong style="font-weight:600">' + esc(isCash ? 'Cash' : x.ticker) + '</strong> <span class="muted" style="font-size:14px">' + esc(isCash ? 'Uninvested' : x.name) + '</span></div>' +
+      h += '<button class="row" data-act="holding" data-row="' + x.row + '"><div class="main"><div class="lbl"><strong style="font-weight:600">' + esc(isCash ? 'Cash' : x.ticker) + '</strong> <span class="muted" style="font-size:14px">' + esc(isCash ? 'Uninvested' : x.name) + '</span></div>' +
         '<div class="sub">' + (isCash ? 'Waiting to be invested' : '<span>' + (Math.round(x.shares * 1000) / 1000) + ' sh at ' + money2(x.price) + '</span>' + (x.ytd != null ? '<span class="acct">' + (x.ytd >= 0 ? '+' : MINUS) + pct(Math.abs(x.ytd)) + ' this year</span>' : '')) + '</div></div>' +
-        '<div class="val">' + money(x.value) + dayTxt + '</div></div>';
+        '<div class="val">' + money(x.value) + dayTxt + '</div></button>';
     });
+    h += '<button class="row" data-act="addholding" data-acct="' + esc(a) + '"><div class="main"><div class="lbl" style="color:var(--pine)">Add a holding or cash</div></div></button>';
     h += '</div>' + (list.some((x) => x.dayAmt != null) ? '<div class="foot">' + signed(dsum, true) + ' today across ' + esc(a) + '</div>' : '') + '</section>';
   });
   const K = M.k401;
@@ -940,7 +941,7 @@ function investingHTML() {
       colsChart('k401', ms.map((m) => m.total), ms.map((m) => m.label.slice(0, 1)), { label: 'Monthly 401k contributions' });
   }
   h += '</div>' + (K.note ? '<div class="foot">' + esc(K.note) + '</div>' : '') + '</section>';
-  h += '<div class="foot" style="margin-top:18px">Prices and daily changes come from Google Finance in your sheet and can lag about 20 minutes. "This year" is each fund\'s price change since Dec 31, not your own return.</div>';
+  h += '<div class="foot" style="margin-top:18px">Tap a holding to change its shares or cash after you buy, sell, or move money in. Prices and daily changes come from Google Finance in your sheet and can lag about 20 minutes. "This year" is each fund\'s price change since Dec 31, not your own return.</div>';
   return h;
 }
 
@@ -1132,7 +1133,38 @@ function settingsHTML() {
     '<button class="row" data-act="refresh"><div class="main"><div class="lbl">Refresh now</div><div class="sub">Pulls fresh on open and every minute</div></div></button>' +
     '<button class="row" data-act="snapshot"><div class="main"><div class="lbl">Save net worth snapshot</div></div></button></div>';
   h += '<div class="group" style="margin-top:22px"><button class="row" data-act="unpair"><div class="main"><div class="lbl neg">' + (S.sheet.confirmUnpair ? 'Tap again to disconnect' : 'Disconnect this phone') + '</div><div class="sub">You will need the pairing link again</div></div></button></div>';
-  h += '<div class="foot" style="text-align:center;margin-top:18px">Moneys for iPhone, v2</div>';
+  h += '<div class="foot" style="text-align:center;margin-top:18px">Moneys for iPhone, v3</div>';
+  return h;
+}
+function holdingHTML() {
+  const s = S.sheet; const x = s.h; const isCash = x.ticker === 'CASH';
+  const v = parseFloat(s.val);
+  const next = s.mode === 'add' ? x.shares + (isNaN(v) ? 0 : v) : (isNaN(v) ? x.shares : v);
+  const ok = !s.busy && !isNaN(v) && next >= 0 && Math.abs(next - x.shares) > 1e-9;
+  let h = '<div class="navbar"><button data-act="close">Cancel</button><span class="t">' + esc(isCash ? 'Cash in ' + x.account : x.ticker + ' in ' + x.account) + '</span><button class="strong" data-act="saveholding" ' + (ok ? '' : 'disabled') + '>' + (s.busy ? 'Saving' : 'Save') + '</button></div>';
+  h += '<div class="group" style="margin-top:12px"><div class="row"><div class="main"><div class="lbl">' + (isCash ? 'Uninvested cash now' : 'You have now') + '</div>' + (isCash ? '' : '<div class="sub">' + x.shares + ' shares at ' + money2(x.price) + '</div>') + '</div><div class="val">' + money2(x.value) + '</div></div></div>';
+  h += '<div class="seg" style="margin-top:18px"><button class="' + (s.mode === 'add' ? 'on' : '') + '" data-act="hmode" data-mode="add">' + (isCash ? 'Add or take out' : 'Bought or sold') + '</button><button class="' + (s.mode === 'set' ? 'on' : '') + '" data-act="hmode" data-mode="set">Set exact ' + (isCash ? 'amount' : 'shares') + '</button></div>';
+  h += '<div class="amount">' + (isCash ? '<span>$</span>' : '') + '<input id="h-amt" inputmode="decimal" placeholder="0" value="' + esc(s.val) + '" style="width:' + amtWidth(s.val) + '" aria-label="' + (isCash ? 'Amount' : 'Shares') + '" autocomplete="off">' + (isCash ? '' : '<span style="font-size:22px;margin-left:6px">sh</span>') + '</div>';
+  h += '<div class="foot" style="text-align:center;margin-top:-4px">' + (s.mode === 'add' ? (isCash ? 'Use a minus sign for money taken out or invested' : 'Use a minus sign for shares you sold') : 'Copy the exact number from Robinhood') + '</div>';
+  h += '<div class="group" style="margin-top:16px"><div class="row"><div class="main"><div class="lbl">New ' + (isCash ? 'cash' : 'total') + '</div>' + (isCash ? '' : '<div class="sub" id="h-sub">' + (Math.round(next * 1e6) / 1e6) + ' shares</div>') + '</div><div class="val" id="h-preview">' + money2(next * x.price) + '</div></div></div>';
+  if (s.err) h += '<div class="err">' + esc(s.err) + '</div>';
+  h += '<div style="margin-top:22px"><button class="btn" data-act="saveholding" ' + (ok ? '' : 'disabled') + '>' + (s.busy ? 'Saving' : 'Save to Investments') + '</button></div>';
+  return h;
+}
+function newHoldingHTML() {
+  const s = S.sheet; const isCash = s.ticker.trim().toUpperCase() === 'CASH';
+  const ok = !s.busy && /^[A-Za-z0-9.:\-]{1,12}$/.test(s.ticker.trim()) && parseFloat(s.shares) > 0;
+  let h = '<div class="navbar"><button data-act="close">Cancel</button><span class="t">Add to ' + esc(s.account) + '</span><button class="strong" data-act="savenew" ' + (ok ? '' : 'disabled') + '>' + (s.busy ? 'Saving' : 'Save') + '</button></div>';
+  h += '<div class="flabel">What is it</div><div class="wrapchips"><button class="chip' + (isCash ? ' on' : '') + '" data-act="nhcash">Uninvested cash</button><button class="chip' + (!isCash ? ' on' : '') + '" data-act="nhstock">A stock or fund</button></div>';
+  if (!isCash) {
+    h += '<div class="field"><label for="h-ticker">Ticker</label><input id="h-ticker" value="' + esc(s.ticker) + '" placeholder="VOO" autocapitalize="characters" autocomplete="off" spellcheck="false"></div>';
+    h += '<div class="field"><label for="h-name">Name (optional)</label><input id="h-name" value="' + esc(s.name) + '" placeholder="Vanguard S&amp;P 500 ETF" autocomplete="off"></div>';
+  }
+  h += '<div class="field"><label for="h-shares">' + (isCash ? 'Amount ($)' : 'Shares') + '</label><input id="h-shares" inputmode="decimal" value="' + esc(s.shares) + '" placeholder="0" autocomplete="off"></div>';
+  if (!isCash) h += '<div class="flabel">Role</div><div class="wrapchips">' + ['Core', 'Satellite'].map((r) => '<button class="chip' + (s.role === r ? ' on' : '') + '" data-act="nhrole" data-v="' + r + '">' + r + '</button>').join('') + '</div>';
+  if (s.err) h += '<div class="err">' + esc(s.err) + '</div>';
+  h += '<div style="margin-top:22px"><button class="btn" data-act="savenew" ' + (ok ? '' : 'disabled') + '>' + (s.busy ? 'Saving' : 'Add to Investments') + '</button></div>';
+  h += '<div class="foot">The price comes from Google Finance once it is in the sheet.</div>';
   return h;
 }
 function confirmHTML() {
@@ -1147,14 +1179,14 @@ function showSheet() {
   const fresh = !root.firstChild;
   const keep = fresh ? null : root.querySelector('.sheet').scrollTop;
   const active = document.activeElement && document.activeElement.id;
-  const html = s.kind === 'tx' ? sheetTxHTML() : s.kind === 'settings' ? settingsHTML() : confirmHTML();
+  const html = s.kind === 'tx' ? sheetTxHTML() : s.kind === 'settings' ? settingsHTML() : s.kind === 'holding' ? holdingHTML() : s.kind === 'newholding' ? newHoldingHTML() : confirmHTML();
   root.innerHTML = '<div class="sheet" role="dialog" aria-modal="true"><div class="inner">' + html + '</div></div>';
   if (!fresh) root.firstChild.style.animation = 'none';
   const el = root.querySelector('.sheet');
   if (keep) el.scrollTop = keep;
   document.body.classList.add('noscroll');
-  if (s.focus) { const f = document.getElementById('f-' + s.focus); s.focus = null; if (f) setTimeout(() => { f.focus(); if (f.id === 'f-what') f.setSelectionRange(f.value.length, f.value.length); }, 80); }
-  else if (active && active.startsWith('f-')) { const f = document.getElementById(active); if (f) { f.focus(); try { f.setSelectionRange(f.value.length, f.value.length); } catch (e) {} } }
+  if (s.focus) { const f = document.getElementById(/^h-/.test(s.focus) ? s.focus : 'f-' + s.focus); s.focus = null; if (f) setTimeout(() => { f.focus(); if (f.id === 'f-what') f.setSelectionRange(f.value.length, f.value.length); }, 80); }
+  else if (active && /^(f|h)-/.test(active)) { const f = document.getElementById(active); if (f) { f.focus(); try { f.setSelectionRange(f.value.length, f.value.length); } catch (e) {} } }
 }
 function closeSheet() { S.sheet = null; showSheet(); }
 
@@ -1345,6 +1377,33 @@ document.addEventListener('click', (ev) => {
       if (!S.sheet.confirmUnpair) { S.sheet.confirmUnpair = true; showSheet(); break; }
       ['pair', 'cache', 'lockId', 'justPaired'].forEach(LS.del); S.model = null; closeSheet(); render(); break;
     case 'unlock': unlock(); break;
+    case 'holding': {
+      const x = S.model.holdings.find((y) => y.row === +d.row); if (!x) break;
+      S.sheet = { kind: 'holding', h: x, mode: x.ticker === 'CASH' ? 'add' : 'set', val: '', err: '', busy: false, focus: 'h-amt' };
+      showSheet(); break;
+    }
+    case 'hmode': S.sheet.mode = d.mode; S.sheet.val = ''; S.sheet.focus = 'h-amt'; showSheet(); break;
+    case 'saveholding': {
+      const s = S.sheet; const x = s.h; const v = parseFloat(s.val);
+      if (isNaN(v)) break;
+      const next = Math.round((s.mode === 'add' ? x.shares + v : v) * 1e6) / 1e6;
+      s.busy = true; s.err = ''; showSheet();
+      api('holding', { row: x.row, match: { account: x.account, ticker: x.ticker, shares: x.shares }, shares: next })
+        .then((j) => { closeSheet(); ingest(j.data); toast('Investments updated'); })
+        .catch((e) => { s.busy = false; s.err = e.message; showSheet(); });
+      break;
+    }
+    case 'addholding': S.sheet = { kind: 'newholding', account: d.acct, ticker: '', name: '', shares: '', role: 'Satellite', err: '', busy: false }; showSheet(); break;
+    case 'nhcash': S.sheet.ticker = 'CASH'; S.sheet.focus = 'h-shares'; showSheet(); break;
+    case 'nhstock': if (S.sheet.ticker.toUpperCase() === 'CASH') S.sheet.ticker = ''; S.sheet.focus = 'h-ticker'; showSheet(); break;
+    case 'nhrole': S.sheet.role = d.v; showSheet(); break;
+    case 'savenew': {
+      const s = S.sheet; s.busy = true; s.err = ''; showSheet();
+      api('addHolding', { holding: { account: s.account, ticker: s.ticker.trim().toUpperCase(), name: s.name, shares: parseFloat(s.shares), role: s.role } })
+        .then((j) => { closeSheet(); ingest(j.data); toast('Added to Investments'); })
+        .catch((e) => { s.busy = false; s.err = e.message; showSheet(); });
+      break;
+    }
     case 'pair': {
       const p = decodePair(document.getElementById('paircode').value);
       if (!p) { toast('That link does not look right. Copy the whole line from the log.'); break; }
@@ -1355,7 +1414,25 @@ document.addEventListener('click', (ev) => {
 document.addEventListener('input', (ev) => {
   const t = ev.target;
   if (t.id === 'q') { S.act.q = t.value; S.act.limit = 80; paintList(); return; }
-  const s = S.sheet; if (!s || s.kind !== 'tx') return;
+  const s = S.sheet; if (!s) return;
+  if (s.kind === 'holding' && t.id === 'h-amt') {
+    s.val = t.value.replace(/[^0-9.\-]/g, ''); if (s.val !== t.value) t.value = s.val; t.style.width = amtWidth(s.val);
+    const v = parseFloat(s.val); const x = s.h;
+    const next = s.mode === 'add' ? x.shares + (isNaN(v) ? 0 : v) : (isNaN(v) ? x.shares : v);
+    const pv = document.getElementById('h-preview'); if (pv) pv.textContent = money2(next * x.price);
+    const sb = document.getElementById('h-sub'); if (sb) sb.textContent = (Math.round(next * 1e6) / 1e6) + ' shares';
+    const ok = !isNaN(v) && next >= 0 && Math.abs(next - x.shares) > 1e-9;
+    document.querySelectorAll('[data-act="saveholding"]').forEach((b) => { b.disabled = !ok; });
+    return;
+  }
+  if (s.kind === 'newholding') {
+    if (t.id === 'h-ticker') s.ticker = t.value; if (t.id === 'h-name') s.name = t.value;
+    if (t.id === 'h-shares') { s.shares = t.value.replace(/[^0-9.]/g, ''); if (s.shares !== t.value) t.value = s.shares; }
+    const ok = /^[A-Za-z0-9.:\-]{1,12}$/.test(s.ticker.trim()) && parseFloat(s.shares) > 0;
+    document.querySelectorAll('[data-act="savenew"]').forEach((b) => { b.disabled = !ok; });
+    return;
+  }
+  if (s.kind !== 'tx') return;
   if (t.id === 'f-amount') { s.amount = t.value.replace(/[^0-9.\-]/g, ''); if (s.amount !== t.value) t.value = s.amount; t.style.width = amtWidth(s.amount); syncSave(); }
   if (t.id === 'f-what') {
     s.what = t.value;
