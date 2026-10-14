@@ -520,7 +520,8 @@ function parse(raw) {
       return { balance: g(label), who, since: SM.get(who + ' reimbursable tracking starts') || '' };
     })(),
     buckets: { cash: byType('Cash'), cards: byType('Credit card'), taxable: byType('Taxable'), roth: byType('Roth IRA'), k401: byType('401k') },
-    limit401, categories, accounts, budgets, log, spending, holdings, k401, history, live, paychecks, payAfter: raw.payAfter || ''
+    limit401, categories, accounts, budgets, log, spending, holdings, k401, history, live, paychecks, payAfter: raw.payAfter || '',
+    plaid: raw.plaid || { configured: false, items: [], accounts: [] }
   };
 }
 
@@ -724,6 +725,7 @@ function homeHTML() {
 
   // things to handle
   const alerts = [];
+  (M.plaid.items || []).filter((x) => x.error).forEach((x) => alerts.push('<button class="row" data-act="connections"><div class="main"><div class="lbl">' + esc(x.institution) + ' needs you to log in again</div><div class="sub">Tap to reconnect</div></div>' + I.chev + '</button>'));
   const review = M.paychecks.filter((p) => /review/i.test(p.status) && (Date.now() - (parseISO(p.date) || 0)) < 60 * 864e5);
   review.forEach((p) => alerts.push('<button class="row" data-act="paycheck" data-date="' + esc(p.date) + '"><div class="main"><div class="lbl">Pay stub needs a look</div><div class="sub">' + esc(shortDate(p.date)) + ': ' + esc(p.status.replace(/^Needs review:\s*/i, '')) + '</div></div>' + I.chev + '</button>'));
   if (M.owed.balance) {
@@ -749,7 +751,11 @@ function accountsHTML() {
     if (!list.length) return;
     const total = list.reduce((s, a) => s + a.balance, 0);
     h += '<section class="section"' + (gi === 0 ? ' style="margin-top:4px"' : '') + '><div class="section-h"><h2>' + title + '</h2><span class="aside num">' + money(total) + '</span></div><div class="group">' +
-      list.map((a) => '<button class="row" data-act="acctpage" data-acct="' + esc(a.name) + '"><div class="main"><div class="lbl">' + esc(a.name) + '</div><div class="sub">' + esc(a.where) + '</div></div><div class="val">' + money2(a.balance) + '</div>' + I.chev + '</button>').join('') + '</div></section>';
+      list.map((a) => {
+        const c = bankCheck(a);
+        const sub = !c ? esc(a.where) : Math.abs(c.diff) <= 1 ? esc(a.where) + '<span class="acct">Matches bank</span>' : '<span style="color:var(--amber)">Bank says ' + money2(c.bank) + '</span>';
+        return '<button class="row" data-act="acctpage" data-acct="' + esc(a.name) + '"><div class="main"><div class="lbl">' + esc(a.name) + '</div><div class="sub">' + sub + '</div></div><div class="val">' + money2(a.balance) + '</div>' + I.chev + '</button>';
+      }).join('') + '</div></section>';
   });
   const inv = M.accounts.filter((a) => !/^(Cash|Credit card)$/.test(a.type));
   if (inv.length) {
@@ -772,6 +778,8 @@ function accountPageHTML(name) {
   const list = M.log.filter((t) => t.account === name || t.to === name);
   let h = '<div class="navbar"><button data-act="back">' + I.back + ' Accounts</button><span></span><span style="width:60px"></span></div>';
   h += '<section class="hero" style="padding-top:4px"><div class="label">' + esc(a.name) + '</div><div class="big">' + money2(a.balance) + '</div><div class="delta muted" style="font-family:var(--text)">' + esc(a.where) + '</div></section>';
+  const bc = bankCheck(a);
+  if (bc && Math.abs(bc.diff) > 1) h += '<section class="section" style="margin-top:18px"><div class="group"><div class="row"><div class="main"><div class="lbl">' + esc(bc.institution) + ' says ' + money2(bc.bank) + '</div><div class="sub wrap">Your Log is ' + money2(Math.abs(bc.diff)) + (bc.diff > 0 ? ' higher' : ' lower') + '. Usually a missing or pending transaction.</div></div></div></div></section>';
   h += '<section class="section" style="margin-top:18px"><div class="group"><div class="row"><div class="main"><div class="lbl">In this month</div></div><div class="val pos">+' + money2(inn) + '</div></div>' +
     '<div class="row"><div class="main"><div class="lbl">Out this month</div></div><div class="val">' + MINUS + money2(out) + '</div></div></div></section>';
   h += '<div style="margin-top:10px">' + txList(list, name, S.pageLimit) + '</div>';
@@ -941,7 +949,9 @@ function investingHTML() {
       colsChart('k401', ms.map((m) => m.total), ms.map((m) => m.label.slice(0, 1)), { label: 'Monthly 401k contributions' });
   }
   h += '</div>' + (K.note ? '<div class="foot">' + esc(K.note) + '</div>' : '') + '</section>';
-  h += '<div class="foot" style="margin-top:18px">Tap a holding to change its shares or cash after you buy, sell, or move money in. Prices and daily changes come from Google Finance in your sheet and can lag about 20 minutes. "This year" is each fund\'s price change since Dec 31, not your own return.</div>';
+  const synced = (M.plaid.accounts || []).filter((x) => x.target === 'Brokerage' || x.target === 'Roth IRA' || x.target === '401k');
+  if (synced.length) h += '<div class="foot" style="margin-top:18px">Synced from ' + esc([...new Set(synced.map((x) => x.institution))].join(' and ')) + ' ' + ago(Math.max(...synced.map((x) => Date.parse(x.updated) || 0))) + '.</div>';
+  h += '<div class="foot" style="margin-top:' + (synced.length ? 6 : 18) + 'px">Tap a holding to change its shares or cash after you buy, sell, or move money in. Prices and daily changes come from Google Finance in your sheet and can lag about 20 minutes. "This year" is each fund\'s price change since Dec 31, not your own return.</div>';
   return h;
 }
 
@@ -1130,10 +1140,11 @@ function settingsHTML() {
   h += '<button class="switch' + (lockOn ? ' on' : '') + '" data-act="toggleLock" style="margin-top:16px"><span>Face ID to open<small>' + (lockOn ? 'Locks after 5 minutes away' : 'Ask for Face ID each time Moneys opens') + '</small></span><span class="k"></span></button>';
   h += '<div class="group" style="margin-top:22px">' +
     (M && M.sheetUrl ? '<a class="row" href="' + esc(M.sheetUrl) + '" target="_blank" rel="noopener"><div class="main"><div class="lbl">Open the Google Sheet</div></div>' + I.chev + '</a>' : '') +
+    '<button class="row" data-act="connections"><div class="main"><div class="lbl">Connected accounts</div><div class="sub">' + (M && M.plaid && M.plaid.items.length ? M.plaid.items.map((x) => x.institution).join(', ') : 'Empower, Robinhood and banks via Plaid') + '</div></div>' + I.chev + '</button>' +
     '<button class="row" data-act="refresh"><div class="main"><div class="lbl">Refresh now</div><div class="sub">Pulls fresh on open and every minute</div></div></button>' +
     '<button class="row" data-act="snapshot"><div class="main"><div class="lbl">Save net worth snapshot</div></div></button></div>';
   h += '<div class="group" style="margin-top:22px"><button class="row" data-act="unpair"><div class="main"><div class="lbl neg">' + (S.sheet.confirmUnpair ? 'Tap again to disconnect' : 'Disconnect this phone') + '</div><div class="sub">You will need the pairing link again</div></div></button></div>';
-  h += '<div class="foot" style="text-align:center;margin-top:18px">Moneys for iPhone, v3</div>';
+  h += '<div class="foot" style="text-align:center;margin-top:18px">Moneys for iPhone, v4</div>';
   return h;
 }
 function holdingHTML() {
@@ -1179,7 +1190,7 @@ function showSheet() {
   const fresh = !root.firstChild;
   const keep = fresh ? null : root.querySelector('.sheet').scrollTop;
   const active = document.activeElement && document.activeElement.id;
-  const html = s.kind === 'tx' ? sheetTxHTML() : s.kind === 'settings' ? settingsHTML() : s.kind === 'holding' ? holdingHTML() : s.kind === 'newholding' ? newHoldingHTML() : confirmHTML();
+  const html = s.kind === 'tx' ? sheetTxHTML() : s.kind === 'settings' ? settingsHTML() : s.kind === 'plaidpick' ? plaidPickHTML() : s.kind === 'holding' ? holdingHTML() : s.kind === 'newholding' ? newHoldingHTML() : confirmHTML();
   root.innerHTML = '<div class="sheet" role="dialog" aria-modal="true"><div class="inner">' + html + '</div></div>';
   if (!fresh) root.firstChild.style.animation = 'none';
   const el = root.querySelector('.sheet');
@@ -1214,6 +1225,91 @@ async function deleteTx() {
     const j = await api('delete', { row: s.orig.row, match: { date: s.orig.date, what: s.orig.what, amount: s.orig.amount } });
     closeSheet(); ingest(j.data); toast('Deleted');
   } catch (e) { s.busy = false; s.confirmDel = false; s.err = e.message; showSheet(); }
+}
+
+/* ================= connected accounts (Plaid) ================= */
+const TARGET_LABEL = (t) => !t ? 'Not used' : t === '401k' ? 'Updates your 401k balance' : (t === 'Brokerage' || t === 'Roth IRA') ? 'Updates ' + t + ' holdings' : 'Checks ' + t;
+function bankCheck(a) {
+  // the Plaid balance mapped to this sheet account, if any
+  const P = S.model.plaid; if (!P || !P.accounts) return null;
+  const p = P.accounts.find((x) => x.target === a.name && typeof x.balance === 'number');
+  if (!p) return null;
+  const bank = p.type === 'credit' ? -p.balance : p.balance;
+  return { bank, diff: a.balance - bank, institution: p.institution };
+}
+function connectionsHTML() {
+  const M = S.model; const P = M.plaid || { configured: false, items: [], accounts: [] };
+  let h = '<div class="navbar"><button data-act="back">' + I.back + ' Back</button><span></span><span style="width:60px"></span></div>';
+  h += '<h1 class="title" style="margin-top:4px">Connected accounts</h1>';
+  if (!P.configured) {
+    h += '<p style="color:var(--ink-2);margin:0 4px 16px;line-height:1.45">Connect Empower and Robinhood so your 401k balance, shares and cash update on their own. This uses Plaid, the same service behind most bank connections, on its free Trial plan.</p>';
+    h += '<div class="group">' + [
+      ['Make a Plaid account', 'Sign up at dashboard.plaid.com and request the free Trial plan. Plaid checks your ID; most people are approved right away.'],
+      ['Copy your keys', 'In Plaid, open Developers, then Keys. Copy the client_id and the Production secret.'],
+      ['Add them to the script', 'Paste both at the top of your Apps Script, save, run setup(), then Deploy, Manage deployments, New version.'],
+    ].map((s, i) => '<div class="row"><div class="main"><div class="lbl">' + (i + 1) + '. ' + s[0] + '</div><div class="sub wrap">' + s[1] + '</div></div></div>').join('') + '</div>';
+    h += '<section class="section"><button class="btn ghost" data-act="refresh">Check again</button></section>';
+    return h;
+  }
+  h += '<div class="group">' +
+    '<button class="row" data-act="plaidconnect" data-kind="invest"><div class="main"><div class="lbl" style="color:var(--pine)">Connect Robinhood or Empower</div><div class="sub">Brokerage, IRA and 401k accounts</div></div>' + I.chev + '</button>' +
+    '<button class="row" data-act="plaidconnect" data-kind="bank"><div class="main"><div class="lbl" style="color:var(--pine)">Connect a bank or card</div><div class="sub">Only compared with your Log</div></div>' + I.chev + '</button></div>';
+  h += '<div class="foot">If a bank\'s login window doesn\'t open on your phone, connect from your Mac\'s browser instead. Once connected, syncing happens on its own.</div>';
+  (P.items || []).forEach((it) => {
+    const accts = (P.accounts || []).filter((a) => a.item === it.id);
+    h += '<section class="section"><div class="section-h"><h2>' + esc(it.institution) + '</h2><span class="aside">' + (it.synced ? 'Synced ' + ago(Date.parse(it.synced)) : '') + '</span></div><div class="group">';
+    if (it.error) h += '<button class="row" data-act="plaidconnect" data-item="' + esc(it.id) + '"><div class="main"><div class="lbl neg">Log in again</div><div class="sub wrap">' + esc(it.institution) + ' stopped sharing data. Tap to reconnect; nothing is lost.</div></div>' + I.chev + '</button>';
+    accts.forEach((a) => {
+      h += '<button class="row" data-act="plaidpick" data-id="' + esc(a.id) + '"><div class="main"><div class="lbl">' + esc(a.name) + (a.mask ? ' <span class="muted" style="font-size:14px">••' + esc(a.mask) + '</span>' : '') + '</div><div class="sub wrap">' + esc(TARGET_LABEL(a.target)) + '</div></div><div class="val">' + (typeof a.balance === 'number' ? money2(a.balance) : '') + '</div>' + I.chev + '</button>';
+    });
+    if (!accts.length) h += '<div class="empty">No accounts came through yet.</div>';
+    h += '<button class="row" data-act="plaidremove" data-item="' + esc(it.id) + '"><div class="main"><div class="lbl neg">' + (S.confirmRemove === it.id ? 'Tap again to disconnect' : 'Disconnect ' + esc(it.institution)) + '</div></div></button></div></section>';
+  });
+  if ((P.items || []).length) h += '<section class="section"><button class="btn ghost" data-act="plaidsync">Sync now</button><div class="foot" style="text-align:center">Syncs every 4 hours on its own' + (P.synced ? '. Last ' + ago(Date.parse(P.synced)) : '') + '.</div></section>';
+  return h;
+}
+function plaidPickHTML() {
+  const s = S.sheet; const M = S.model;
+  const a = (M.plaid.accounts || []).find((x) => x.id === s.id) || {};
+  const opts = a.type === 'investment'
+    ? [['401k', 'Leidos 401k balance'], ['Brokerage', 'Brokerage shares and cash'], ['Roth IRA', 'Roth IRA shares and cash']]
+    : M.accounts.filter((x) => /^(Cash|Credit card)$/.test(x.type)).map((x) => [x.name, 'Check ' + x.name]);
+  opts.push(['', 'Not used']);
+  let h = '<div class="navbar"><button data-act="close">Cancel</button><span class="t">' + esc(a.name || 'Account') + '</span><span style="width:60px"></span></div>';
+  h += '<p style="color:var(--ink-2);margin:14px 4px">' + esc(a.institution || '') + (a.mask ? ' account ending ' + esc(a.mask) : '') + (typeof a.balance === 'number' ? ', ' + money2(a.balance) : '') + '. What should it update?</p>';
+  h += '<div class="group">' + opts.map((o) => '<button class="row" data-act="plaidset" data-target="' + esc(o[0]) + '" ' + (s.busy ? 'disabled' : '') + '><div class="main"><div class="lbl">' + esc(o[1]) + '</div></div>' + ((a.target || '') === o[0] ? '<span class="pos" style="font-weight:600">Selected</span>' : '') + '</button>').join('') + '</div>';
+  if (a.type !== 'investment') h += '<div class="foot">Bank and card balances are only compared with your sheet. Your Log stays the source of truth.</div>';
+  return h;
+}
+function loadPlaid() {
+  return new Promise((res, rej) => {
+    if (window.Plaid) return res();
+    const s = document.createElement('script');
+    s.src = 'https://cdn.plaid.com/link/v2/stable/link-initialize.js';
+    s.onload = () => res(); s.onerror = () => rej(new Error('Could not load Plaid. Check your connection.'));
+    document.head.appendChild(s);
+  });
+}
+function syncMsg(r) {
+  if (!r) return 'Synced';
+  if (r.problems && r.problems.length) return r.problems[0];
+  return r.applied && r.applied.length ? 'Updated ' + [...new Set(r.applied)].join(', ') : 'Synced';
+}
+async function plaidConnect(kind, itemId) {
+  toast('Opening Plaid');
+  try {
+    const j = await api('plaidLinkToken', { kind: kind || 'invest', itemId: itemId || null });
+    await loadPlaid();
+    window.Plaid.create({
+      token: j.link_token,
+      onSuccess: (publicToken, md) => {
+        toast('Connected. Syncing your accounts');
+        const call = itemId ? api('plaidSync') : api('plaidExchange', { public_token: publicToken, institution: md && md.institution, kind });
+        call.then((r) => { ingest(r.data); toast(syncMsg(r.result)); }).catch((e) => toast(e.message));
+      },
+      onExit: (err) => { if (err) toast(err.display_message || err.error_message || 'Plaid closed'); },
+    }).open();
+  } catch (e) { toast(e.message); }
 }
 
 /* ================= Face ID lock ================= */
@@ -1293,7 +1389,7 @@ function renderPages() {
   const top = S.pages[S.pages.length - 1];
   const old = root.querySelector('.page');
   const keep = old && old.dataset.p === top ? old.scrollTop : 0;
-  const body = top === 'networth' ? networthHTML() : top === 'paycheck' ? paycheckHTML() : top.startsWith('acct:') ? accountPageHTML(top.slice(5)) : '';
+  const body = top === 'networth' ? networthHTML() : top === 'paycheck' ? paycheckHTML() : top === 'connections' ? connectionsHTML() : top.startsWith('acct:') ? accountPageHTML(top.slice(5)) : '';
   root.innerHTML = '<div class="page" data-p="' + esc(top) + '"><div class="inner">' + body + '</div></div>';
   if (keep) { const p = root.querySelector('.page'); p.style.animation = 'none'; p.scrollTop = keep; }
 }
@@ -1377,6 +1473,25 @@ document.addEventListener('click', (ev) => {
       if (!S.sheet.confirmUnpair) { S.sheet.confirmUnpair = true; showSheet(); break; }
       ['pair', 'cache', 'lockId', 'justPaired'].forEach(LS.del); S.model = null; closeSheet(); render(); break;
     case 'unlock': unlock(); break;
+    case 'connections': S.sheet = null; showSheet(); S.confirmRemove = null; pushPage('connections'); break;
+    case 'plaidconnect': plaidConnect(d.kind, d.item); break;
+    case 'plaidsync':
+      toast('Syncing');
+      api('plaidSync').then((r) => { ingest(r.data); toast(syncMsg(r.result)); }).catch((e) => toast(e.message));
+      break;
+    case 'plaidpick': S.sheet = { kind: 'plaidpick', id: d.id, busy: false }; showSheet(); break;
+    case 'plaidset': {
+      const s = S.sheet; if (s.busy) break; s.busy = true; showSheet();
+      api('plaidMap', { accountId: s.id, target: d.target || '' })
+        .then((r) => { closeSheet(); ingest(r.data); toast(syncMsg(r.result)); })
+        .catch((e) => { s.busy = false; showSheet(); toast(e.message); });
+      break;
+    }
+    case 'plaidremove':
+      if (S.confirmRemove !== d.item) { S.confirmRemove = d.item; renderPages(); break; }
+      S.confirmRemove = null;
+      api('plaidRemove', { itemId: d.item }).then((r) => { ingest(r.data); toast('Disconnected'); }).catch((e) => toast(e.message));
+      break;
     case 'holding': {
       const x = S.model.holdings.find((y) => y.row === +d.row); if (!x) break;
       S.sheet = { kind: 'holding', h: x, mode: x.ticker === 'CASH' ? 'add' : 'set', val: '', err: '', busy: false, focus: 'h-amt' };
