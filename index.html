@@ -1177,7 +1177,7 @@ function settingsHTML() {
     '<button class="row" data-act="refresh"><div class="main"><div class="lbl">Refresh now</div><div class="sub">Pulls fresh on open and every minute</div></div></button>' +
     '<button class="row" data-act="snapshot"><div class="main"><div class="lbl">Save net worth snapshot</div></div></button></div>';
   h += '<div class="group" style="margin-top:22px"><button class="row" data-act="unpair"><div class="main"><div class="lbl neg">' + (S.sheet.confirmUnpair ? 'Tap again to disconnect' : 'Disconnect this phone') + '</div><div class="sub">You will need the pairing link again</div></div></button></div>';
-  h += '<div class="foot" style="text-align:center;margin-top:18px">Moneys for iPhone, v10</div>';
+  h += '<div class="foot" style="text-align:center;margin-top:18px">Moneys for iPhone, v11</div>';
   return h;
 }
 function holdingHTML() {
@@ -1474,7 +1474,7 @@ function notifyHTML() {
     h += note('One step in your script first', 'In Apps Script, run setup() once, then Deploy, Manage deployments, pencil, New version, Deploy. Then tap Check again.');
     h += '<section class="section"><button class="btn ghost" data-act="refresh">Check again</button></section>';
   } else if (!P.supported) {
-    h += STANDALONE ? note('This iPhone can\'t get them yet', 'Notifications for home screen apps need iOS 16.4 or newer. Update in Settings, General, Software Update.')
+    h += STANDALONE ? note('Re-add Moneys to your home screen', 'Your icon was added before Moneys could do notifications, and iPhone keeps an icon the way it was first added. In Apps Script run pairPhone() and open its link on this phone in Safari. Tap Share, Add to Home Screen, keep Open as Web App on, and tap Add. Open the new icon, come back here, then delete the old icon.')
       : note('Open Moneys from your home screen', 'iPhone only sends notifications to apps opened from their home screen icon, not from a Safari tab.');
   } else if (P.permission === 'denied') {
     h += note('Notifications are blocked', 'Open iPhone Settings, Notifications, Moneys, and turn on Allow Notifications. Then come back here.');
@@ -1494,6 +1494,12 @@ function notifyHTML() {
     ['Sunday recap', '6pm: the week, the month and net worth'],
   ].map((x) => '<div class="row"><div class="main"><div class="lbl">' + x[0] + '</div><div class="sub">' + x[1] + '</div></div></div>').join('') + '</div></section>';
   h += '<div class="foot">Tapping a notification opens Moneys. They carry totals, never account numbers.</div>';
+  // small print for troubleshooting: what this phone reports
+  const ios = (/OS (\d+)_(\d+)/.exec(navigator.userAgent) || []).slice(1, 3).join('.');
+  h += '<div class="foot" style="opacity:.7">Check: ' + [
+    'iOS ' + (ios || '?'), 'home screen app ' + (STANDALONE ? 'yes' : 'no'), 'push ' + ('PushManager' in window ? 'yes' : 'no'),
+    'alerts ' + ('Notification' in window ? Notification.permission : 'no'), 'script key ' + (M.push.publicKey ? 'yes' : 'no'), 'phones ' + (M.push.devices || []).length,
+  ].join(', ') + '</div>';
   return h;
 }
 function widgetHTML() {
