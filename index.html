@@ -118,6 +118,11 @@ button.row:active, .row.tap:active { background: var(--surface-2); }
 .pos { color: var(--pine); }
 .neg { color: var(--down); }
 .muted { color: var(--ink-2); }
+.row .tapmain { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; text-align: left; margin: -12px 0; padding: 12px 0; }
+.row .tapmain:active { opacity: .6; }
+.pill { flex: none; font-size: 13px; font-weight: 500; padding: 6px 11px; border-radius: 14px; background: var(--surface-2); color: var(--ink-2); }
+.pill:active { opacity: .6; }
+.topic { font-size: 15px; margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); word-break: break-all; user-select: all; -webkit-user-select: all; }
 .tag { font-size: 11px; font-weight: 600; padding: 2px 6px; border-radius: 6px; background: var(--surface-2); color: var(--ink-2); }
 
 /* ---------- hero ---------- */
@@ -521,7 +526,12 @@ function parse(raw) {
     })(),
     buckets: { cash: byType('Cash'), cards: byType('Credit card'), taxable: byType('Taxable'), roth: byType('Roth IRA'), k401: byType('401k') },
     limit401, categories, accounts, budgets, log, spending, holdings, k401, history, live, paychecks, payAfter: raw.payAfter || '',
-    plaid: raw.plaid || { configured: false, items: [], accounts: [] }
+    plaid: raw.plaid || { configured: false, items: [], accounts: [] },
+    // bank and card transactions from Plaid (last 45 days), only used to check the Log
+    feed: (raw.bankFeed || []).slice(1).filter((r) => r && /^\d{4}-\d{2}-\d{2}/.test(r[0] || '') && r[5]).map((r) => ({
+      date: String(r[0]).slice(0, 10), desc: String(r[1] || ''), amount: num(r[2]), account: String(r[3] || ''), pending: r[4] === 'Yes', id: String(r[5]), status: String(r[6] || '')
+    })),
+    ntfyTopic: raw.ntfyTopic || ''
   };
 }
 
@@ -732,6 +742,8 @@ function homeHTML() {
     const owes = M.owed.balance < 0; const who = esc(M.owed.who);
     alerts.push('<button class="row" data-act="drill" data-cat="Reimbursable" data-since="' + esc(M.owed.since) + '"><div class="main"><div class="lbl">' + (owes ? who + ' owes you' : 'You owe ' + who) + '</div><div class="sub">Reimbursable since ' + esc(shortDate(M.owed.since) || 'tracking started') + '</div></div><div class="val">' + money2(Math.abs(M.owed.balance)) + '</div>' + I.chev + '</button>');
   }
+  const inbox = inboxList();
+  if (inbox.length) alerts.push('<button class="row" data-act="inbox"><div class="main"><div class="lbl">Not in your Log yet</div><div class="sub">' + (inbox.length === 1 ? 'A bank transaction' : inbox.length + ' bank transactions') + ' to add or ignore</div></div><div class="val" style="color:var(--amber)">' + inbox.length + '</div>' + I.chev + '</button>');
   if (M.watch.uncategorized) alerts.push('<button class="row" data-act="drill" data-cat="Uncategorized"><div class="main"><div class="lbl">Needs a category</div><div class="sub">Tap one to fix it</div></div><div class="val neg">' + M.watch.uncategorized + '</div>' + I.chev + '</button>');
   if (M.watch.missingDate) alerts.push('<div class="row"><div class="main"><div class="lbl">Missing a date</div><div class="sub">Fix these in the sheet</div></div><div class="val neg">' + M.watch.missingDate + '</div></div>');
   if (alerts.length) h += '<section class="section"><div class="group">' + alerts.join('') + '</div></section>';
@@ -745,15 +757,21 @@ function homeHTML() {
 function accountsHTML() {
   const M = S.model;
   let h = headerHTML('Accounts');
+  const inbox = inboxList();
+  if (inbox.length) {
+    h += '<section class="section" style="margin-top:4px"><div class="section-h"><h2>Not in your Log</h2><button class="aside" data-act="inbox">' + (inbox.length > 4 ? 'See all ' + inbox.length : 'Why') + '</button></div><div class="group">' +
+      inbox.slice(0, 4).map(feedRowHTML).join('') + '</div></section>';
+  }
   const groups = [['Cash', 'Bank accounts'], ['Credit card', 'Credit cards']];
   groups.forEach(([type, title], gi) => {
     const list = M.accounts.filter((a) => a.type === type);
     if (!list.length) return;
     const total = list.reduce((s, a) => s + a.balance, 0);
-    h += '<section class="section"' + (gi === 0 ? ' style="margin-top:4px"' : '') + '><div class="section-h"><h2>' + title + '</h2><span class="aside num">' + money(total) + '</span></div><div class="group">' +
+    h += '<section class="section"' + (gi === 0 && !inbox.length ? ' style="margin-top:4px"' : '') + '><div class="section-h"><h2>' + title + '</h2><span class="aside num">' + money(total) + '</span></div><div class="group">' +
       list.map((a) => {
         const c = bankCheck(a);
-        const sub = !c ? esc(a.where) : Math.abs(c.diff) <= 1 ? esc(a.where) + '<span class="acct">Matches bank</span>' : '<span style="color:var(--amber)">Bank says ' + money2(c.bank) + '</span>';
+        const miss = (missingFromLog().byAcct[a.name] || []).length;
+        const sub = miss ? '<span style="color:var(--amber)">' + miss + ' not in your Log</span>' : !c ? esc(a.where) : Math.abs(c.diff) <= 1 ? esc(a.where) + '<span class="acct">Matches bank</span>' : '<span style="color:var(--amber)">Bank says ' + money2(c.bank) + '</span>';
         return '<button class="row" data-act="acctpage" data-acct="' + esc(a.name) + '"><div class="main"><div class="lbl">' + esc(a.name) + '</div><div class="sub">' + sub + '</div></div><div class="val">' + money2(a.balance) + '</div>' + I.chev + '</button>';
       }).join('') + '</div></section>';
   });
@@ -780,6 +798,8 @@ function accountPageHTML(name) {
   h += '<section class="hero" style="padding-top:4px"><div class="label">' + esc(a.name) + '</div><div class="big">' + money2(a.balance) + '</div><div class="delta muted" style="font-family:var(--text)">' + esc(a.where) + '</div></section>';
   const bc = bankCheck(a);
   if (bc && Math.abs(bc.diff) > 1) h += '<section class="section" style="margin-top:18px"><div class="group"><div class="row"><div class="main"><div class="lbl">' + esc(bc.institution) + ' says ' + money2(bc.bank) + '</div><div class="sub wrap">Your Log is ' + money2(Math.abs(bc.diff)) + (bc.diff > 0 ? ' higher' : ' lower') + '. Usually a missing or pending transaction.</div></div></div></div></section>';
+  const miss = inboxList(name);
+  if (miss.length) h += '<section class="section" style="margin-top:18px"><div class="section-h"><h2>Not in your Log</h2><span class="aside">' + miss.length + '</span></div><div class="group">' + miss.map(feedRowHTML).join('') + '</div></section>';
   h += '<section class="section" style="margin-top:18px"><div class="group"><div class="row"><div class="main"><div class="lbl">In this month</div></div><div class="val pos">+' + money2(inn) + '</div></div>' +
     '<div class="row"><div class="main"><div class="lbl">Out this month</div></div><div class="val">' + MINUS + money2(out) + '</div></div></div></section>';
   h += '<div style="margin-top:10px">' + txList(list, name, S.pageLimit) + '</div>';
@@ -1151,10 +1171,12 @@ function settingsHTML() {
   h += '<div class="group" style="margin-top:22px">' +
     (M && M.sheetUrl ? '<a class="row" href="' + esc(M.sheetUrl) + '" target="_blank" rel="noopener"><div class="main"><div class="lbl">Open the Google Sheet</div></div>' + I.chev + '</a>' : '') +
     '<button class="row" data-act="connections"><div class="main"><div class="lbl">Connected accounts</div><div class="sub">' + (M && M.plaid && M.plaid.items.length ? M.plaid.items.map((x) => x.institution).join(', ') : 'Empower, Robinhood and banks via Plaid') + '</div></div>' + I.chev + '</button>' +
+    '<button class="row" data-act="notifypage"><div class="main"><div class="lbl">Notifications</div><div class="sub">' + (M && M.ntfyTopic ? 'Paychecks, budgets, Sunday recap' : 'Run setup() to turn on') + '</div></div>' + I.chev + '</button>' +
+    '<button class="row" data-act="widgetpage"><div class="main"><div class="lbl">Home screen widget</div><div class="sub">Net worth at a glance</div></div>' + I.chev + '</button>' +
     '<button class="row" data-act="refresh"><div class="main"><div class="lbl">Refresh now</div><div class="sub">Pulls fresh on open and every minute</div></div></button>' +
     '<button class="row" data-act="snapshot"><div class="main"><div class="lbl">Save net worth snapshot</div></div></button></div>';
   h += '<div class="group" style="margin-top:22px"><button class="row" data-act="unpair"><div class="main"><div class="lbl neg">' + (S.sheet.confirmUnpair ? 'Tap again to disconnect' : 'Disconnect this phone') + '</div><div class="sub">You will need the pairing link again</div></div></button></div>';
-  h += '<div class="foot" style="text-align:center;margin-top:18px">Moneys for iPhone, v6</div>';
+  h += '<div class="foot" style="text-align:center;margin-top:18px">Moneys for iPhone, v7</div>';
   return h;
 }
 function holdingHTML() {
@@ -1277,6 +1299,173 @@ function bankCheck(a) {
   const bank = p.type === 'credit' ? -p.balance : p.balance;
   return { bank, diff: a.balance - bank, institution: p.institution };
 }
+/* ================= bank feed vs Log ================= */
+const dayDiff = (a, b) => Math.round(((parseISO(a) || 0) - (parseISO(b) || 0)) / 864e5);
+const STOPWORDS = new Set(['the', 'and', 'inc', 'llc', 'pos', 'debit', 'credit', 'purchase', 'payment', 'online', 'transfer', 'deposit', 'withdrawal', 'ach', 'mobile', 'check', 'atm', 'web', 'recurring', 'from', 'card', 'sq', 'tst', 'www', 'com', 'venmo', 'zelle', 'paypal', 'cash', 'pmt', 'xfer']);
+// "Sam: Dunkin' Donuts #123" and "DUNKIN" both become "dunkin"
+function merchantKey(s) {
+  const words = String(s || '').toLowerCase().replace(/^[a-z]+:\s*/, '').replace(/['’]/g, '').replace(/[^a-z0-9 ]+/g, ' ').split(/\s+/);
+  return words.find((w) => w.length >= 3 && !STOPWORDS.has(w) && !/^\d+$/.test(w)) || '';
+}
+function sameMerchant(a, b) {
+  const x = merchantKey(a), y = merchantKey(b);
+  if (!x || !y) return false;
+  return x === y || (Math.min(x.length, y.length) >= 4 && (x.startsWith(y) || y.startsWith(x)));
+}
+// The closest earlier Log entry for the same merchant, so a bank line comes in with your usual name and category.
+function guessFromLog(desc) {
+  const L = S.model.log; const d = desc.trim().toLowerCase();
+  const exact = L.find((t) => t.what.trim().toLowerCase() === d && t.category);
+  if (exact) return exact;
+  const key = merchantKey(desc); if (!key) return null;
+  const hits = L.filter((t) => t.category && merchantKey(t.what) === key);
+  return hits.find((t) => !/^[^:]{1,20}:/.test(t.what)) || hits[0] || null;
+}
+// Every bank or card line that has no matching Log entry. Matched by account, amount and a date within 5 days.
+function missingFromLog() {
+  const M = S.model; if (M._missing) return M._missing;
+  const out = { items: [], changed: [], byAcct: {} };
+  const feed = M.feed.filter((f) => !f.pending && f.status !== 'Ignored' && f.account && f.amount);
+  if (!feed.length) return (M._missing = out);
+  const oldest = feed.reduce((m, f) => (f.date < m ? f.date : m), '9999-12-31');
+  [...new Set(feed.map((f) => f.account))].forEach((acct) => {
+    const logs = M.log.filter((t) => (t.account === acct || t.to === acct) && t.date && dayDiff(t.date, oldest) >= -7)
+      .map((t) => ({ t, v: Math.round(txSign(t, acct) * 100) / 100, used: false }));
+    let left = [];
+    // 1. same amount, closest date
+    feed.filter((f) => f.account === acct).sort((a, b) => (a.date < b.date ? -1 : 1)).forEach((f) => {
+      let best = null, bd = 99;
+      logs.forEach((L) => {
+        if (L.used || Math.abs(L.v - f.amount) > 0.01) return;
+        const dd = Math.abs(dayDiff(L.t.date, f.date)); if (dd <= 5 && dd < bd) { best = L; bd = dd; }
+      });
+      if (best) best.used = true; else left.push(f);
+    });
+    // 2. one bank deposit that covers several Venmo payments logged separately
+    left = left.filter((f) => {
+      if (!/venmo/i.test(f.desc)) return true;
+      const pool = logs.filter((L) => !L.used && Math.sign(L.v) === Math.sign(f.amount) && /venmo/i.test(L.t.what + ' ' + L.t.note) && dayDiff(f.date, L.t.date) >= 0 && dayDiff(f.date, L.t.date) <= 10).slice(0, 12);
+      for (let mask = 1; mask < (1 << pool.length); mask++) {
+        let sum = 0; for (let i = 0; i < pool.length; i++) if (mask & (1 << i)) sum += pool[i].v;
+        if (Math.abs(sum - f.amount) <= 0.01) { pool.forEach((L, i) => { if (mask & (1 << i)) L.used = true; }); return false; }
+      }
+      return true;
+    });
+    // 3. same merchant, amount moved (a tip added after it posted)
+    left.forEach((f) => {
+      const L = logs.find((x) => !x.used && x.v && Math.sign(x.v) === Math.sign(f.amount) && f.amount / x.v >= 0.7 && f.amount / x.v <= 1.4 &&
+        Math.abs(dayDiff(x.t.date, f.date)) <= 4 && sameMerchant(x.t.what, f.desc));
+      if (L) { L.used = true; out.changed.push({ f, t: L.t, logAmt: L.v }); } else out.items.push(f);
+    });
+  });
+  out.items.sort((a, b) => (a.date < b.date ? 1 : -1));
+  out.items.concat(out.changed.map((c) => c.f)).forEach((f) => { (out.byAcct[f.account] = out.byAcct[f.account] || []).push(f); });
+  return (M._missing = out);
+}
+function feedRowHTML(f) {
+  const m = missingFromLog(); const ch = m.changed.find((c) => c.f.id === f.id);
+  const amt = f.amount > 0 ? '+' + money2(f.amount) : money2(-f.amount);
+  const sub = ch
+    ? '<span style="color:var(--amber)">Log has ' + money2(Math.abs(ch.logAmt)) + '</span><span class="acct">' + esc(short(f.account)) + '</span>'
+    : '<span>' + esc(shortDate(f.date)) + '</span><span class="acct">' + esc(short(f.account)) + '</span>';
+  return '<div class="row"><button class="tapmain" data-act="' + (ch ? 'feedfix' : 'feedadd') + '" data-id="' + esc(f.id) + '"><div class="main"><div class="lbl">' + esc(f.desc || 'Bank transaction') + '</div><div class="sub">' + sub + '</div></div>' +
+    '<div class="val ' + (f.amount > 0 ? 'pos' : '') + '">' + esc(amt) + '</div></button><button class="pill" data-act="feedignore" data-id="' + esc(f.id) + '" aria-label="Ignore ' + esc(f.desc) + '">Ignore</button></div>';
+}
+function inboxList(acct) {
+  const m = missingFromLog();
+  const list = (acct ? m.byAcct[acct] || [] : m.changed.map((c) => c.f).concat(m.items));
+  return list;
+}
+function inboxHTML() {
+  const list = inboxList();
+  let h = '<div class="navbar"><button data-act="back">' + I.back + ' Back</button><span></span><span style="width:60px"></span></div>';
+  h += '<h1 class="title" style="margin-top:4px">Not in your Log</h1>';
+  if (!list.length) return h + '<div class="group"><div class="empty">Everything your banks and cards show is in your Log.</div></div>';
+  h += '<p style="color:var(--ink-2);margin:0 4px 16px;line-height:1.45">Your connected banks and cards show these, but your Log does not. Tap one to add it, or Ignore it if it is already covered another way.</p>';
+  const byAcct = {};
+  list.forEach((f) => { (byAcct[f.account] = byAcct[f.account] || []).push(f); });
+  Object.keys(byAcct).forEach((a, i) => {
+    h += '<section class="section"' + (i ? '' : ' style="margin-top:8px"') + '><div class="section-h"><h2>' + esc(a) + '</h2><span class="aside">' + byAcct[a].length + '</span></div><div class="group">' + byAcct[a].map(feedRowHTML).join('') + '</div></section>';
+  });
+  h += '<div class="foot">Checks the last 45 days. Pending charges show up once they post.</div>';
+  return h;
+}
+// Open the add sheet filled in from a bank line
+function openFromFeed(f) {
+  const M = S.model; const acct = M.accounts.find((a) => a.name === f.account) || {};
+  const isCard = acct.type === 'Credit card';
+  const hit = guessFromLog(f.desc);
+  const s = { kind: 'tx', mode: 'add', type: 'spend', amount: Math.abs(f.amount).toFixed(2).replace(/\.00$/, ''), what: f.desc, cat: '', account: f.account, to: '', date: f.date, refund: false, note: 'From bank feed', touched: { cat: 1, account: 1 }, err: '', busy: false, feedId: f.id };
+  if (hit) { s.what = hit.what; s.cat = hit.category; s.type = typeOfGroup(groupOf(hit.category)); }
+  else if (f.amount > 0) s.type = isCard ? (/payment|autopay|thank/i.test(f.desc) ? 'move' : 'spend') : 'income';
+  else s.type = /transfer|xfer|robinhood|payment|autopay/i.test(f.desc) ? 'move' : 'spend';
+  if (s.type === 'spend' && f.amount > 0) s.refund = true;
+  if (s.type === 'income' && f.amount < 0) s.refund = true;
+  if (s.type === 'move') {
+    // money moving in shows up on the receiving account, so that is the "To" side
+    if (f.amount > 0) { s.to = f.account; s.account = hit && hit.to === f.account ? hit.account : ''; } else if (hit) s.to = hit.to || '';
+  }
+  if (s.cat && !TYPE_GROUPS[s.type].includes(groupOf(s.cat))) s.cat = '';
+  S.sheet = s; showSheet();
+}
+function ignoreFeed(id) {
+  const f = S.model.feed.find((x) => x.id === id); if (!f) return;
+  f.status = 'Ignored'; S.model._missing = null; render();
+  api('feedIgnore', { txnId: id }).then((j) => ingest(j.data)).catch((e) => { f.status = ''; S.model._missing = null; render(); toast(e.message); });
+}
+
+/* ================= notifications + widget ================= */
+function notifyHTML() {
+  const M = S.model; const topic = M.ntfyTopic;
+  let h = '<div class="navbar"><button data-act="back">' + I.back + ' Back</button><span></span><span style="width:60px"></span></div>';
+  h += '<h1 class="title" style="margin-top:4px">Notifications</h1>';
+  h += '<p style="color:var(--ink-2);margin:0 4px 16px;line-height:1.45">Moneys sends alerts through ntfy, a free app with no account to make. It is a one time setup.</p>';
+  if (!topic) {
+    h += '<div class="group"><div class="row"><div class="main"><div class="lbl">Not turned on yet</div><div class="sub wrap">Open your Apps Script and run setup() once. It makes your private topic.</div></div></div></div>';
+    h += '<section class="section"><button class="btn ghost" data-act="refresh">Check again</button></section>';
+    return h;
+  }
+  h += '<div class="group">' +
+    '<a class="row" href="https://apps.apple.com/app/id1625396347" target="_blank" rel="noopener"><div class="main"><div class="lbl">1. Get the ntfy app</div><div class="sub">Free on the App Store</div></div>' + I.chev + '</a>' +
+    '<div class="row"><div class="main"><div class="lbl">2. Subscribe to your topic</div><div class="sub wrap">In ntfy tap +, paste this, and leave "Use another server" off.</div><div class="topic num">' + esc(topic) + '</div></div></div>' +
+    '<button class="row" data-act="copytopic"><div class="main"><div class="lbl" style="color:var(--pine)">Copy topic</div></div></button>' +
+    '<button class="row" data-act="testnotify"><div class="main"><div class="lbl" style="color:var(--pine)">3. Send a test</div><div class="sub">Should pop up in a few seconds</div></div></button></div>';
+  h += '<section class="section"><div class="section-h"><h2>You will hear about</h2></div><div class="group">' + [
+    ['A paycheck landing', 'Take-home and 401k, logged for you'],
+    ['Budgets', 'At 80% and when you go over'],
+    ['Venmo', 'Payments that need a category'],
+    ['Things that need you', 'A pay stub to check or a login that expired'],
+    ['Sunday recap', '6pm: the week, the month and net worth'],
+  ].map((x) => '<div class="row"><div class="main"><div class="lbl">' + x[0] + '</div><div class="sub">' + x[1] + '</div></div></div>').join('') + '</div></section>';
+  h += '<div class="foot">Your topic works like a password, so keep it to yourself. Messages pass through ntfy.sh and only carry totals, never account numbers.</div>';
+  return h;
+}
+function widgetHTML() {
+  let h = '<div class="navbar"><button data-act="back">' + I.back + ' Back</button><span></span><span style="width:60px"></span></div>';
+  h += '<h1 class="title" style="margin-top:4px">Home screen widget</h1>';
+  h += '<p style="color:var(--ink-2);margin:0 4px 16px;line-height:1.45">Net worth, today\'s investing change, free to spend, and your tightest budget, right on your home screen. iPhone needs a small free app called Scriptable to run it.</p>';
+  h += '<div class="group">' +
+    '<a class="row" href="https://apps.apple.com/app/id1405459188" target="_blank" rel="noopener"><div class="main"><div class="lbl">1. Get Scriptable</div><div class="sub">Free on the App Store</div></div>' + I.chev + '</a>' +
+    '<button class="row" data-act="copywidget"><div class="main"><div class="lbl" style="color:var(--pine)">2. Copy widget script</div><div class="sub">Has your private key, so don\'t share it</div></div></button>' +
+    '<div class="row"><div class="main"><div class="lbl">3. Paste it into Scriptable</div><div class="sub wrap">Tap +, paste, then tap the title at the top and name it Moneys.</div></div></div>' +
+    '<div class="row"><div class="main"><div class="lbl">4. Add the widget</div><div class="sub wrap">Hold down on your home screen, tap Edit, then Add Widget. Pick Scriptable, medium size. Hold the new widget, tap Edit Widget, and set Script to Moneys.</div></div></div></div>';
+  h += '<div class="foot">It refreshes about every 30 minutes; iOS decides the exact timing. Small, medium, large and Lock Screen sizes all work.</div>';
+  if (S.widgetFallback) h += '<div class="field" style="margin-top:16px"><label for="w-src">Copy did not work. Select all of this and copy it.</label><textarea id="w-src" readonly style="width:100%;min-height:160px;border:0;background:none;font:12px ui-monospace,monospace;outline:none">' + esc(S.widgetFallback) + '</textarea></div>';
+  return h;
+}
+function widgetSource() {
+  const p = LS.get('pair', null); if (!p || !S.widgetSrc) return '';
+  return S.widgetSrc.replace("'__API__'", JSON.stringify(p.u)).replace("'__KEY__'", JSON.stringify(p.k));
+}
+function loadWidgetSrc() {
+  if (S.widgetSrc) return Promise.resolve(S.widgetSrc);
+  return fetch('widget.js', { cache: 'no-cache' }).then((r) => { if (!r.ok) throw new Error('Could not load the widget script'); return r.text(); }).then((t) => (S.widgetSrc = t));
+}
+function copyText(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(text);
+  return Promise.reject(new Error('no clipboard'));
+}
+
 function connectionsHTML() {
   const M = S.model; const P = M.plaid || { configured: false, items: [], accounts: [] };
   let h = '<div class="navbar"><button data-act="back">' + I.back + ' Back</button><span></span><span style="width:60px"></span></div>';
@@ -1435,7 +1624,8 @@ function renderPages() {
   const top = S.pages[S.pages.length - 1];
   const old = root.querySelector('.page');
   const keep = old && old.dataset.p === top ? old.scrollTop : 0;
-  const body = top === 'networth' ? networthHTML() : top === 'paycheck' ? paycheckHTML() : top === 'connections' ? connectionsHTML() : top.startsWith('acct:') ? accountPageHTML(top.slice(5)) : '';
+  const body = top === 'networth' ? networthHTML() : top === 'paycheck' ? paycheckHTML() : top === 'connections' ? connectionsHTML() : top === 'inbox' ? inboxHTML() :
+    top === 'notify' ? notifyHTML() : top === 'widget' ? widgetHTML() : top.startsWith('acct:') ? accountPageHTML(top.slice(5)) : '';
   root.innerHTML = '<div class="page" data-p="' + esc(top) + '"><div class="inner">' + body + '</div></div>';
   if (keep) { const p = root.querySelector('.page'); p.style.animation = 'none'; p.scrollTop = keep; }
 }
@@ -1520,6 +1710,26 @@ document.addEventListener('click', (ev) => {
       ['pair', 'cache', 'lockId', 'justPaired'].forEach(LS.del); S.model = null; closeSheet(); render(); break;
     case 'unlock': unlock(); break;
     case 'connections': S.sheet = null; showSheet(); S.confirmRemove = null; pushPage('connections'); break;
+    case 'inbox': pushPage('inbox'); break;
+    case 'feedadd': { const f = S.model.feed.find((x) => x.id === d.id); if (f) openFromFeed(f); break; }
+    case 'feedfix': {
+      const c = missingFromLog().changed.find((x) => x.f.id === d.id); if (!c) break;
+      openEdit(c.t.row);
+      if (S.sheet) { S.sheet.amount = Math.abs(c.f.amount).toFixed(2); S.sheet.note = S.sheet.note || 'Amount from bank'; S.sheet.focus = 'amount'; showSheet(); }
+      break;
+    }
+    case 'feedignore': ignoreFeed(d.id); break;
+    case 'notifypage': S.sheet = null; showSheet(); pushPage('notify'); break;
+    case 'widgetpage': S.sheet = null; showSheet(); S.widgetFallback = ''; loadWidgetSrc().catch(() => {}); pushPage('widget'); break;
+    case 'copytopic': copyText(S.model.ntfyTopic).then(() => toast('Topic copied')).catch(() => toast(S.model.ntfyTopic)); break;
+    case 'testnotify': toast('Sending'); api('testNotify').then(() => toast('Sent. Check ntfy.')).catch((e) => toast(e.message)); break;
+    case 'copywidget': {
+      const src = widgetSource();
+      const fail = () => loadWidgetSrc().then(() => { S.widgetFallback = widgetSource(); renderPages(); toast('Copy it from the box below'); }).catch((e) => toast(e.message));
+      if (!src) { fail(); break; }
+      copyText(src).then(() => toast('Copied. Now paste it in Scriptable.')).catch(fail);
+      break;
+    }
     case 'plaidconnect': plaidConnect(d.kind, d.item); break;
     case 'plaidsync':
       toast('Syncing');
