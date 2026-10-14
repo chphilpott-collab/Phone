@@ -1272,7 +1272,7 @@ function plaidPickHTML() {
   const s = S.sheet; const M = S.model;
   const a = (M.plaid.accounts || []).find((x) => x.id === s.id) || {};
   const opts = a.type === 'investment'
-    ? [['401k', 'Leidos 401k balance'], ['Brokerage', 'Brokerage shares and cash'], ['Roth IRA', 'Roth IRA shares and cash']]
+    ? [['401k', (M.accounts.find((x) => x.type === '401k') || { name: '401k' }).name + ' balance'], ['Brokerage', 'Brokerage shares and cash'], ['Roth IRA', 'Roth IRA shares and cash']]
     : M.accounts.filter((x) => /^(Cash|Credit card)$/.test(x.type)).map((x) => [x.name, 'Check ' + x.name]);
   opts.push(['', 'Not used']);
   let h = '<div class="navbar"><button data-act="close">Cancel</button><span class="t">' + esc(a.name || 'Account') + '</span><span style="width:60px"></span></div>';
